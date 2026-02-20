@@ -1,0 +1,22 @@
+.main-layout {
+  display: flex;
+  height: 100vh;
+  background-color: var(--bg-secondary);
+}
+
+.main-content {
+  flex: 1;
+  overflow: auto;
+  padding: 2rem;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .main-layout {
+    flex-direction: column;
+  }
+  
+  .main-content {
+    padding: 1rem;
+  }
+}
