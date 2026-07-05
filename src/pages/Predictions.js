@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Line,
   XAxis,
@@ -23,6 +23,23 @@ import {
 
 const API_BASE = 'http://localhost:8000/api';
 
+const horizons = [
+  { value: 1, label: '15 min' },
+  { value: 2, label: '30 min' },
+  { value: 4, label: '1 hour' },
+  { value: 8, label: '2 hours' },
+  { value: 96, label: '24 hours' },
+];
+
+// Approximate inverse error function for Q-Q plot
+function inverseErf(x) {
+  const a = 0.147;
+  const ln = Math.log(1 - x * x);
+  const s = Math.sign(x);
+  const t = 2 / (Math.PI * a) + ln / 2;
+  return s * Math.sqrt(Math.sqrt(t * t - ln / a) - t);
+}
+
 const Predictions = () => {
   const [predictions, setPredictions] = useState(null);
   const [evaluation, setEvaluation] = useState(null);
@@ -31,16 +48,8 @@ const Predictions = () => {
 
   const [usingDemoData, setUsingDemoData] = useState(false);
 
-  const horizons = [
-    { value: 1, label: '15 min' },
-    { value: 2, label: '30 min' },
-    { value: 4, label: '1 hour' },
-    { value: 8, label: '2 hours' },
-    { value: 96, label: '24 hours' },
-  ];
-
   // Generate demo data if API is not available
-  const generateDemoData = () => {
+  const generateDemoData = useCallback(() => {
     const demoData = {};
     const demoEval = {};
 
@@ -123,16 +132,7 @@ const Predictions = () => {
     });
 
     return { predictions: demoData, evaluation: demoEval };
-  };
-
-  // Approximate inverse error function for Q-Q plot
-  function inverseErf(x) {
-    const a = 0.147;
-    const ln = Math.log(1 - x * x);
-    const s = Math.sign(x);
-    const t = 2 / (Math.PI * a) + ln / 2;
-    return s * Math.sqrt(Math.sqrt(t * t - ln / a) - t);
-  }
+  }, []);
 
   useEffect(() => {
     let first = true;
@@ -164,7 +164,7 @@ const Predictions = () => {
     fetchData();
     const interval = setInterval(fetchData, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [generateDemoData]);
 
   if (loading) {
     return (

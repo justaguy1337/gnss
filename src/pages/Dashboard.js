@@ -25,6 +25,14 @@ import {
 
 const API_BASE = 'http://localhost:8000/api';
 
+const horizons = [
+  { value: 1, label: '15 min' },
+  { value: 2, label: '30 min' },
+  { value: 4, label: '1 hr' },
+  { value: 8, label: '2 hr' },
+  { value: 96, label: '24 hr' },
+];
+
 const Dashboard = () => {
   const [predictions, setPredictions] = useState(null);
   const [evaluation, setEvaluation] = useState(null);
@@ -33,14 +41,6 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [usingDemoData, setUsingDemoData] = useState(false);
   const [selectedHorizon, setSelectedHorizon] = useState(1);
-
-  const horizons = [
-    { value: 1, label: '15 min' },
-    { value: 2, label: '30 min' },
-    { value: 4, label: '1 hr' },
-    { value: 8, label: '2 hr' },
-    { value: 96, label: '24 hr' },
-  ];
 
   // Generate realistic demo data matching the API shape
   const generateDemoData = useCallback(() => {
@@ -83,7 +83,7 @@ const Dashboard = () => {
     });
 
     return { predictions: demoPred, evaluation: demoEval };
-  }, []);
+  }, [horizons]);
 
   useEffect(() => {
     let first = true;
