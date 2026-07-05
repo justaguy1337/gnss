@@ -78,12 +78,15 @@ def evaluate_predictions(
 
     # Anderson-Darling
     try:
+        import warnings
         from scipy.stats import anderson
-        ad_result = anderson(residuals, dist='norm')
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            ad_result = anderson(residuals, dist='norm')
         ad_stat = float(ad_result.statistic)
         # Compare against 5% significance level (index 2 = 5%)
         ad_critical_5pct = float(ad_result.critical_values[2])
-        ad_is_normal = ad_stat < ad_critical_5pct
+        ad_is_normal = bool(ad_stat < ad_critical_5pct)
     except Exception:
         ad_stat, ad_critical_5pct, ad_is_normal = 0.0, 0.0, False
 
@@ -103,23 +106,23 @@ def evaluate_predictions(
         # Normality tests
         "shapiro_wilk": {
             "statistic": float(sw_stat),
-            "p_value": float(sw_pval),
-            "is_normal": sw_pval > 0.05,
+            "p_value":   float(sw_pval),
+            "is_normal": bool(sw_pval > 0.05),
         },
         "dagostino_pearson": {
             "statistic": float(da_stat),
-            "p_value": float(da_pval),
-            "is_normal": da_pval > 0.05,
+            "p_value":   float(da_pval),
+            "is_normal": bool(da_pval > 0.05),
         },
         "kolmogorov_smirnov": {
             "statistic": float(ks_stat),
-            "p_value": float(ks_pval),
-            "is_normal": ks_pval > 0.05,
+            "p_value":   float(ks_pval),
+            "is_normal": bool(ks_pval > 0.05),
         },
         "anderson_darling": {
-            "statistic": ad_stat,
+            "statistic":    ad_stat,
             "critical_5pct": ad_critical_5pct,
-            "is_normal": ad_is_normal,
+            "is_normal":    ad_is_normal,
         },
     }
 

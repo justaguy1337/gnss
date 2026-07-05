@@ -135,6 +135,7 @@ const Predictions = () => {
   }
 
   useEffect(() => {
+    let first = true;
     const fetchData = async () => {
       try {
         const [predRes, evalRes] = await Promise.all([
@@ -150,16 +151,19 @@ const Predictions = () => {
           throw new Error('API not available');
         }
       } catch {
-        // Use demo data
-        const demo = generateDemoData();
-        setPredictions(demo.predictions);
-        setEvaluation(demo.evaluation);
-        setUsingDemoData(true);
+        if (first) {
+          const demo = generateDemoData();
+          setPredictions(demo.predictions);
+          setEvaluation(demo.evaluation);
+          setUsingDemoData(true);
+        }
       } finally {
-        setLoading(false);
+        if (first) { setLoading(false); first = false; }
       }
     };
     fetchData();
+    const interval = setInterval(fetchData, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   if (loading) {

@@ -9,7 +9,7 @@
 /coverage
 
 # production
-/build
+
 
 # misc
 .DS_Store
@@ -21,3 +21,11 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+
+ml/__pycache__/
+ml/cache/
+ml/checkpoints/
+ml/results/
+ml/data/__pycache__/
+ml/pipeline/__pycache__/

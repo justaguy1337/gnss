@@ -86,6 +86,7 @@ const Dashboard = () => {
   }, []);
 
   useEffect(() => {
+    let first = true;
     const fetchData = async () => {
       try {
         const [statusRes, predRes, evalRes, modelsRes] = await Promise.all([
@@ -105,15 +106,19 @@ const Dashboard = () => {
           throw new Error('API not available');
         }
       } catch {
-        const demo = generateDemoData();
-        setPredictions(demo.predictions);
-        setEvaluation(demo.evaluation);
-        setUsingDemoData(true);
+        if (first) {
+          const demo = generateDemoData();
+          setPredictions(demo.predictions);
+          setEvaluation(demo.evaluation);
+          setUsingDemoData(true);
+        }
       } finally {
-        setLoading(false);
+        if (first) { setLoading(false); first = false; }
       }
     };
     fetchData();
+    const interval = setInterval(fetchData, 10000);
+    return () => clearInterval(interval);
   }, [generateDemoData]);
 
   if (loading) {

@@ -24,17 +24,23 @@ SEQUENCE_LENGTH   = 24            # Look-back window: 24 steps = 6 hours at 15mi
 TRAIN_DAYS        = 7             # 7 days training (Sep 1-7)
 TEST_STEPS        = 24            # ~6 hours of day-8 test data after resample
 
-# Real dataset location
+# Real dataset locations — both organised into subfolders
 DATASET_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dataset")
+TRAIN_DIR   = os.path.join(DATASET_DIR, "train")   # D:\github\gnss\dataset\train
+TEST_DIR    = os.path.join(DATASET_DIR, "test")    # D:\github\gnss\dataset\test
 
 # Dataset file mapping: satellite_id -> (train_files, test_files, type)
 DATASET_FILES = {
     "GEO": {
+        "train_dir": TRAIN_DIR,
+        "test_dir":  TEST_DIR,
         "train": ["DATA_GEO_Train.csv"],
         "test":  ["DATA_GEO_Test.csv"],
         "type":  "GEO",
     },
     "MEO": {
+        "train_dir": TRAIN_DIR,
+        "test_dir":  TEST_DIR,
         "train": ["DATA_MEO_Train.csv", "DATA_MEO_Train2.csv"],
         "test":  ["DATA_MEO_Test.csv",  "DATA_MEO_Test2.csv"],
         "type":  "MEO",
