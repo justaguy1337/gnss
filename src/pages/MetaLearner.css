@@ -1,6 +1,6 @@
 /* Simple Meta Learner Styles */
 .meta-learner-simple {
-  background: #ffffff;
+  background: var(--bg-primary, #ffffff);
   min-height: 100vh;
   padding: 2rem;
 }
@@ -11,14 +11,14 @@
 }
 
 .simple-header h1 {
-  color: #333;
+  color: var(--text-primary, #333);
   font-size: 2.5rem;
   margin: 0 0 1rem 0;
   font-weight: 600;
 }
 
 .simple-header p {
-  color: #666;
+  color: var(--text-secondary, #666);
   font-size: 1.1rem;
   margin: 0;
 }
@@ -29,9 +29,9 @@
   height: 80vh;
   max-width: 1000px;
   margin: 0 auto;
-  border: 2px solid #e0e0e0;
+  border: 2px solid var(--border-color, #e0e0e0);
   border-radius: 10px;
-  background: #fafafa;
+  background: var(--surface-alt, #fafafa);
 }
 
 /* SVG Connections */
@@ -81,8 +81,8 @@
 .center-circle {
   width: 150px;
   height: 150px;
-  background: white;
-  border: 3px solid #333;
+  background: var(--bg-primary, white);
+  border: 3px solid var(--text-primary, #333);
   border-radius: 50%;
   display: flex;
   flex-direction: column;
@@ -172,14 +172,14 @@
 .center-circle h3 {
   margin: 0;
   font-size: 1.1rem;
-  color: #333;
+  color: var(--text-primary, #333);
   font-weight: 600;
 }
 
 .center-circle p {
   margin: 0.3rem 0 0 0;
   font-size: 0.9rem;
-  color: #666;
+  color: var(--text-secondary, #666);
 }
 
 .final-result {
@@ -193,7 +193,7 @@
   position: absolute;
   width: 120px;
   height: 120px;
-  background: white;
+  background: var(--bg-primary, white);
   border: 3px solid;
   border-radius: 50%;
   display: flex;
@@ -243,16 +243,15 @@
 }
 
 .model-circle h4 {
-  margin: 0 0 0.3rem 0;
-  font-size: 0.9rem;
-  color: #333;
+  margin: 0 0 0.2rem 0;
+  font-size: 0.85rem;
+  color: var(--text-primary, #333);
   font-weight: 600;
 }
 
 .model-circle span {
-  font-size: 1rem;
+  font-size: 0.95rem;
   font-weight: 700;
-  color: #666;
 }
 
 /* Animated Connection Lines - Fixed positioning */

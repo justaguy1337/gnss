@@ -1,49 +1,168 @@
-import React, { useState } from 'react';
-import { Brain, Cpu, Network, Zap, Target, Layers, X, TrendingUp } from 'lucide-react';
-import { ResponsiveLine } from '@nivo/line';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Brain, Cpu, Zap, Target, X, GitMerge } from 'lucide-react';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer
+} from 'recharts';
+
+const API_BASE = 'http://localhost:8000/api';
 
 const ModelInsights = () => {
   const [selectedModel, setSelectedModel] = useState(null);
+  const [evaluation, setEvaluation] = useState(null);
+  const [modelsInfo, setModelsInfo] = useState(null);
+  const [usingDemoData, setUsingDemoData] = useState(false);
 
+  const generateDemoEval = useCallback(() => {
+    const horizons = [1, 2, 4, 8, 96];
+    const ev = {};
+    horizons.forEach(h => {
+      ev[h] = {
+        horizon: h, horizon_min: h * 15,
+        rmse: 0.04 + h * 0.008 + Math.random() * 0.01,
+        mae: 0.03 + h * 0.006 + Math.random() * 0.008,
+        r2_score: 0.97 - h * 0.003 + (Math.random() - 0.5) * 0.01,
+        shapiro_wilk: { p_value: 0.15 + Math.random() * 0.6, is_normal: true },
+        residual_mean: (Math.random() - 0.5) * 0.02,
+        residual_std: 0.03 + h * 0.005,
+      };
+    });
+    return ev;
+  }, []);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [evalRes, modelsRes] = await Promise.all([
+          fetch(`${API_BASE}/evaluation`).catch(() => null),
+          fetch(`${API_BASE}/models`).catch(() => null),
+        ]);
+        if (evalRes?.ok) {
+          setEvaluation(await evalRes.json());
+          if (modelsRes?.ok) setModelsInfo(await modelsRes.json());
+          setUsingDemoData(false);
+        } else throw new Error();
+      } catch {
+        setEvaluation(generateDemoEval());
+        setUsingDemoData(true);
+      }
+    };
+    fetchData();
+  }, [generateDemoEval]);
+
+  // Actual models from the paper
   const models = [
-    { name: 'LSTM-GRU', icon: Brain, accuracy: '91.2%', description: 'Hybrid recurrent neural network' },
-    { name: 'TimeGPT', icon: Zap, accuracy: '94.7%', description: 'Transformer-based foundation model' },
-    { name: 'XGBoost', icon: Target, accuracy: '89.5%', description: 'Gradient boosting framework' },
-    { name: 'Gaussian Process', icon: Cpu, accuracy: '87.3%', description: 'Probabilistic model' },
-    { name: 'GAN', icon: Network, accuracy: '92.8%', description: 'Generative Adversarial Network' },
-    { name: 'TCN', icon: Layers, accuracy: '90.2%', description: 'Temporal Convolutional Network' },
+    {
+      name: 'LSTM-GRU',
+      icon: Brain,
+      role: 'Base Model 1',
+      description: 'Hybrid recurrent network for short-term drift capture (Paper §III-C)',
+      architecture: 'Input(96×1) → LSTM(64, 2 layers) → GRU(64, 1 layer) → Dense(32) → ReLU → Dense(1)',
+      details: [
+        'LSTM captures long-term dependencies via forget/input/output gates',
+        'GRU refines with lighter reset/update gating',
+        'Adam optimizer + gradient clipping (max norm = 1.0)',
+        'LR scheduling: ReduceOnPlateau with patience=5',
+        'Early stopping with patience=10',
+        'Target normalization via StandardScaler',
+      ],
+      color: '#3B82F6',
+    },
+    {
+      name: 'Transformer',
+      icon: Zap,
+      role: 'Base Model 2',
+      description: 'Self-attention encoder for long-range orbital cycle patterns (Paper §III-D)',
+      architecture: 'Input(96×1) → Linear(1→64) + LearnedPosEncoding → TransformerEncoder(2L, 4H) → LastToken → Dense(1)',
+      details: [
+        'Learned positional embedding (nn.Embedding, not sinusoidal)',
+        'Multi-head self-attention scans all timestamp pairs',
+        'Captures orbital period harmonics across 96 timesteps',
+        'Same training protocol as LSTM-GRU',
+        'd_model=64, n_heads=4, FFN dim=128',
+      ],
+      color: '#8B5CF6',
+    },
+    {
+      name: 'XGBoost',
+      icon: Target,
+      role: 'Base Model 3',
+      description: 'Gradient boosted trees on engineered tabular features (Paper §III-E)',
+      architecture: 'X_tab (lags + rolling stats + cyclic + diffs + horizon h) → XGBRegressor → prediction',
+      details: [
+        'Single unified model — horizon h is an input feature',
+        'Lag features at t-1, t-2, t-4, t-8, t-96',
+        'Rolling mean/std/max/min over 3-hour window',
+        'Cyclic sin/cos for daily and half-daily patterns',
+        '1st & 2nd order differences (rate + acceleration)',
+        'Regularized objective with tree complexity penalty',
+        'max_depth=6, n_estimators=500, lr=0.05',
+      ],
+      color: '#10B981',
+    },
+    {
+      name: 'Ridge Stacker',
+      icon: GitMerge,
+      role: 'Meta-Learner',
+      description: 'Per-horizon weighted blending of base model predictions (Paper §III-F)',
+      architecture: '[p_LSTM, p_Transformer, p_XGB] → Ridge(α=1.0) → ŷ_h per horizon',
+      details: [
+        'Separate Ridge regression per forecast horizon h',
+        'Learns adaptive weights w₁, w₂, w₃ per horizon',
+        'Short horizons: LSTM-GRU typically gets higher weight',
+        'Long horizons: Transformer typically dominates',
+        'Trained on out-of-fold validation predictions',
+        'L2 regularization prevents weight explosion',
+      ],
+      color: '#F59E0B',
+    },
+    {
+      name: 'Gaussian Process',
+      icon: Cpu,
+      role: 'Residual Corrector',
+      description: 'GP with Matérn + Periodic kernel for residual modeling & uncertainty (Paper §III-G)',
+      architecture: 'r = y - ŷ_stacker → GP(k_Matérn(ν=2.5) + k_Periodic) → μ_GP, σ_GP',
+      details: [
+        'Models stacker residuals r_h = y_h - ŷ_h',
+        'Composite kernel: Matérn(ν=2.5) + Periodic',
+        'Matérn: rough but continuous residual patterns',
+        'Periodic: repeating orbital cycle signals',
+        'Kernel hyperparameters via log marginal likelihood',
+        'Outputs: mean correction μ_GP + uncertainty σ_GP',
+        'Final: ŷ_final = ŷ_h + μ_GP',
+        'Key: ensures approximately Gaussian residuals',
+      ],
+      color: '#EC4899',
+    },
   ];
 
-  // Generate dummy prediction data for each model
-  const generatePredictionData = (modelName, accuracy) => {
-    const baseAccuracy = parseFloat(accuracy.replace('%', ''));
-    const points = [];
-    
-    for (let i = 0; i < 20; i++) {
-      const variance = (Math.random() - 0.5) * 10; // ±5% variance
-      const prediction = Math.max(0, Math.min(100, baseAccuracy + variance));
-      const actual = Math.max(0, Math.min(100, baseAccuracy + (Math.random() - 0.5) * 8));
-      
-      points.push({
-        day: i + 1,
-        prediction: prediction.toFixed(1),
-        actual: actual.toFixed(1)
-      });
-    }
-    
-    return points;
-  };
+  // Compute average metrics from evaluation
+  const avgR2 = evaluation
+    ? Object.values(evaluation).reduce((s, ev) => s + (ev.r2_score || 0), 0) / Object.keys(evaluation).length
+    : 0;
+  const avgRMSE = evaluation
+    ? Object.values(evaluation).reduce((s, ev) => s + (ev.rmse || 0), 0) / Object.keys(evaluation).length
+    : 0;
 
-  const handleModelClick = (model) => {
-    setSelectedModel({
-      ...model,
-      predictions: generatePredictionData(model.name, model.accuracy)
-    });
-  };
+  // Ridge weights per horizon
+  const weightsData = modelsInfo
+    ? [1, 2, 4, 8, 96].map(h => {
+        const w = modelsInfo.horizons?.[h]?.weights || {};
+        return {
+          horizon: `${h * 15}min`,
+          'LSTM-GRU': parseFloat((w['LSTM-GRU'] || 0.33).toFixed(3)),
+          'Transformer': parseFloat((w['Transformer'] || 0.33).toFixed(3)),
+          'XGBoost': parseFloat((w['XGBoost'] || 0.33).toFixed(3)),
+        };
+      })
+    : [1, 2, 4, 8, 96].map((h, i) => ({
+        horizon: `${h * 15}min`,
+        'LSTM-GRU': parseFloat((0.45 - i * 0.04).toFixed(3)),
+        'Transformer': parseFloat((0.25 + i * 0.05).toFixed(3)),
+        'XGBoost': parseFloat((0.30 - i * 0.01).toFixed(3)),
+      }));
 
-  const closeModal = () => {
-    setSelectedModel(null);
-  };
+
 
   return (
     <div className="animate-fade-in">
@@ -52,384 +171,270 @@ const ModelInsights = () => {
           Model Insights
         </h1>
         <p style={{ color: 'var(--text-secondary)' }}>
-          Understanding the hybrid ML framework for satellite error prediction
+          Stacked ensemble architecture: 3 base models → Ridge stacker → GP residual correction
+          {usingDemoData && (
+            <span style={{ color: 'var(--accent-500)', marginLeft: '0.5rem', fontSize: '0.8rem' }}>
+              (Demo data)
+            </span>
+          )}
         </p>
       </div>
 
-      <div className="grid-cols-3">
-        {models.map((model, index) => (
+      {/* Pipeline Flow Visualization */}
+      <div className="card" style={{ marginBottom: '2rem', padding: '1.5rem', textAlign: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {models.map((model, i) => (
+            <React.Fragment key={model.name}>
+              <div
+                onClick={() => setSelectedModel(model)}
+                style={{
+                  padding: '0.5rem 1rem',
+                  borderRadius: '0.5rem',
+                  backgroundColor: model.color + '20',
+                  border: `1.5px solid ${model.color}`,
+                  color: model.color,
+                  fontWeight: '600',
+                  fontSize: '0.8rem',
+                  cursor: 'pointer',
+                  transition: 'transform 0.2s ease',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.05)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+              >
+                {model.name}
+              </div>
+              {i < models.length - 1 && (
+                <span style={{ color: 'var(--text-muted)', fontSize: '1.2rem' }}>→</span>
+              )}
+            </React.Fragment>
+          ))}
+        </div>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '0.75rem' }}>
+          Click any component to view architecture details
+        </p>
+      </div>
+
+      {/* Model Cards */}
+      <div className="grid-cols-3" style={{ marginBottom: '2rem' }}>
+        {models.slice(0, 3).map((model, index) => (
           <div 
             key={model.name} 
             className="card animate-slide-up" 
             style={{ 
               animationDelay: `${index * 100}ms`,
               cursor: 'pointer',
-              transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+              transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+              borderTop: `3px solid ${model.color}`
             }}
-            onClick={() => handleModelClick(model)}
+            onClick={() => setSelectedModel(model)}
             onMouseEnter={(e) => {
-              e.currentTarget.style.transform = 'translateY(-2px)';
-              e.currentTarget.style.boxShadow = '0 4px 20px rgba(0,0,0,0.1)';
+              e.currentTarget.style.transform = 'translateY(-3px)';
+              e.currentTarget.style.boxShadow = `0 6px 24px ${model.color}30`;
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.transform = 'translateY(0)';
               e.currentTarget.style.boxShadow = '';
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-              <div 
-                style={{
-                  width: '2.5rem',
-                  height: '2.5rem',
-                  backgroundColor: 'var(--primary-100)',
-                  borderRadius: '0.5rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'var(--primary-600)'
-                }}
-              >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+              <div style={{
+                width: '2.5rem', height: '2.5rem', borderRadius: '0.5rem',
+                backgroundColor: model.color + '20',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: model.color
+              }}>
                 <model.icon size={20} />
               </div>
               <div>
-                <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>
+                <h3 className="font-semibold" style={{ color: 'var(--text-primary)', fontSize: '1rem' }}>
                   {model.name}
                 </h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                  {model.description}
-                </p>
+                <span style={{ color: model.color, fontSize: '0.7rem', fontWeight: '600' }}>
+                  {model.role}
+                </span>
               </div>
             </div>
-            <div style={{ textAlign: 'center' }}>
-              <div className="text-2xl font-bold" style={{ color: 'var(--primary-600)' }}>
-                {model.accuracy}
-              </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                Accuracy
-              </div>
-            </div>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', lineHeight: '1.4' }}>
+              {model.description}
+            </p>
           </div>
         ))}
       </div>
 
-      <div className="card" style={{ marginTop: '2rem', textAlign: 'center' }}>
-        <h2 className="text-2xl font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
-          Ensemble Performance
-        </h2>
-        <div className="text-5xl font-bold mb-2" style={{ color: 'var(--accent-500)' }}>
-          96.1%
+      {/* Meta-learner + GP cards */}
+      <div className="grid-cols-2" style={{ marginBottom: '2rem' }}>
+        {models.slice(3).map((model, index) => (
+          <div 
+            key={model.name} 
+            className="card animate-slide-up" 
+            style={{ 
+              animationDelay: `${(index + 3) * 100}ms`,
+              cursor: 'pointer',
+              transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+              borderTop: `3px solid ${model.color}`
+            }}
+            onClick={() => setSelectedModel(model)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'translateY(-3px)';
+              e.currentTarget.style.boxShadow = `0 6px 24px ${model.color}30`;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '';
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+              <div style={{
+                width: '2.5rem', height: '2.5rem', borderRadius: '0.5rem',
+                backgroundColor: model.color + '20',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: model.color
+              }}>
+                <model.icon size={20} />
+              </div>
+              <div>
+                <h3 className="font-semibold" style={{ color: 'var(--text-primary)', fontSize: '1rem' }}>
+                  {model.name}
+                </h3>
+                <span style={{ color: model.color, fontSize: '0.7rem', fontWeight: '600' }}>
+                  {model.role}
+                </span>
+              </div>
+            </div>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', lineHeight: '1.4' }}>
+              {model.description}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* Ensemble Performance + Ridge Weights */}
+      <div className="grid-cols-2" style={{ marginBottom: '2rem' }}>
+        <div className="card" style={{ textAlign: 'center' }}>
+          <h2 className="text-xl font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
+            Ensemble Performance
+          </h2>
+          <div className="text-4xl font-bold mb-2" style={{ color: 'var(--primary-600)' }}>
+            {(avgR2 * 100).toFixed(1)}%
+          </div>
+          <div style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>Average R² Score</div>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem' }}>
+            <div>
+              <div className="text-xl font-bold" style={{ color: '#10B981' }}>
+                {avgRMSE.toFixed(4)}
+              </div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Avg RMSE</div>
+            </div>
+            <div>
+              <div className="text-xl font-bold" style={{ color: '#8B5CF6' }}>
+                {evaluation ? Object.values(evaluation).filter(ev => ev.shapiro_wilk?.is_normal).length : 0}/{evaluation ? Object.keys(evaluation).length : 0}
+              </div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Normal Residuals</div>
+            </div>
+          </div>
         </div>
-        <div style={{ color: 'var(--text-secondary)' }}>
-          Combined Model Accuracy
+
+        <div className="card">
+          <h2 className="text-xl font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
+            Ridge Stacker Weights by Horizon
+          </h2>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={weightsData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
+              <XAxis dataKey="horizon" stroke="#6B7280" fontSize={11} />
+              <YAxis stroke="#6B7280" fontSize={11} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)',
+                  borderRadius: '8px', color: 'var(--text-primary)'
+                }}
+              />
+              <Legend />
+              <Bar dataKey="LSTM-GRU" stackId="a" fill="#3B82F6" />
+              <Bar dataKey="Transformer" stackId="a" fill="#8B5CF6" />
+              <Bar dataKey="XGBoost" stackId="a" fill="#10B981" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       </div>
 
-      {/* Modal for Model Predictions */}
+      {/* Modal for model details */}
       {selectedModel && (
         <div 
           style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
             backgroundColor: 'rgba(0, 0, 0, 0.7)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '1rem'
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000, padding: '1rem'
           }}
-          onClick={closeModal}
+          onClick={() => setSelectedModel(null)}
         >
           <div 
             className="card"
             style={{
-              width: '90%',
-              maxWidth: '900px',
-              maxHeight: '80vh',
-              overflow: 'auto',
-              position: 'relative'
+              width: '90%', maxWidth: '700px', maxHeight: '80vh',
+              overflow: 'auto', position: 'relative',
+              borderTop: `4px solid ${selectedModel.color}`
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Modal Header */}
+            {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <div 
-                  style={{
-                    width: '2.5rem',
-                    height: '2.5rem',
-                    backgroundColor: 'var(--primary-100)',
-                    borderRadius: '0.5rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: 'var(--primary-600)'
-                  }}
-                >
+                <div style={{
+                  width: '2.5rem', height: '2.5rem', borderRadius: '0.5rem',
+                  backgroundColor: selectedModel.color + '20',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: selectedModel.color
+                }}>
                   <selectedModel.icon size={20} />
                 </div>
                 <div>
-                  <h2 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
-                    {selectedModel.name} Predictions
+                  <h2 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>
+                    {selectedModel.name}
                   </h2>
-                  <p style={{ color: 'var(--text-secondary)' }}>
-                    {selectedModel.description} - {selectedModel.accuracy} Accuracy
-                  </p>
+                  <span style={{ color: selectedModel.color, fontSize: '0.8rem', fontWeight: '600' }}>
+                    {selectedModel.role}
+                  </span>
                 </div>
               </div>
               <button
-                onClick={closeModal}
+                onClick={() => setSelectedModel(null)}
                 style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  padding: '0.5rem',
-                  borderRadius: '0.25rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
+                  background: 'none', border: 'none', color: 'var(--text-secondary)',
+                  cursor: 'pointer', padding: '0.5rem'
                 }}
               >
                 <X size={24} />
               </button>
             </div>
 
-            {/* Accuracy Stats */}
-            <div className="grid-cols-3" style={{ marginBottom: '2rem' }}>
-              <div className="card" style={{ textAlign: 'center', backgroundColor: 'var(--background-secondary)' }}>
-                <div className="text-2xl font-bold" style={{ color: 'var(--primary-600)' }}>
-                  {selectedModel.accuracy}
-                </div>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                  Overall Accuracy
-                </div>
-              </div>
-              <div className="card" style={{ textAlign: 'center', backgroundColor: 'var(--background-secondary)' }}>
-                <div className="text-2xl font-bold" style={{ color: 'var(--accent-500)' }}>
-                  {(Math.random() * 5 + 2).toFixed(1)}%
-                </div>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                  Mean Error
-                </div>
-              </div>
-              <div className="card" style={{ textAlign: 'center', backgroundColor: 'var(--background-secondary)' }}>
-                <div className="text-2xl font-bold" style={{ color: 'var(--success-500)' }}>
-                  {(Math.random() * 0.2 + 0.8).toFixed(2)}
-                </div>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                  R² Score
-                </div>
-              </div>
+            {/* Architecture */}
+            <div style={{
+              backgroundColor: 'var(--surface-alt)', borderRadius: '0.5rem',
+              padding: '1rem', marginBottom: '1.5rem',
+              fontFamily: 'monospace', fontSize: '0.8rem',
+              color: 'var(--text-primary)', lineHeight: '1.6',
+              borderLeft: `3px solid ${selectedModel.color}`
+            }}>
+              {selectedModel.architecture}
             </div>
 
-            {/* Nivo Line Chart */}
-            <div className="card" style={{ backgroundColor: 'var(--background-secondary)' }}>
-              <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <TrendingUp size={20} />
-                Prediction vs Actual Values (Last 20 Days)
-              </h3>
-              
-              <div style={{ height: '400px' }}>
-                <ResponsiveLine
-                  data={[
-                    {
-                      id: 'Predicted',
-                      color: '#3b82f6',
-                      data: selectedModel.predictions.map(point => ({
-                        x: `Day ${point.day}`,
-                        y: parseFloat(point.prediction)
-                      }))
-                    },
-                    {
-                      id: 'Actual',
-                      color: '#f59e0b',
-                      data: selectedModel.predictions.map(point => ({
-                        x: `Day ${point.day}`,
-                        y: parseFloat(point.actual)
-                      }))
-                    }
-                  ]}
-                  margin={{ top: 50, right: 110, bottom: 50, left: 60 }}
-                  xScale={{ type: 'point' }}
-                  yScale={{
-                    type: 'linear',
-                    min: 'auto',
-                    max: 'auto',
-                    stacked: false,
-                    reverse: false
-                  }}
-                  yFormat=" >-.2f"
-                  axisTop={null}
-                  axisRight={null}
-                  axisBottom={{
-                    tickSize: 5,
-                    tickPadding: 5,
-                    tickRotation: -45,
-                    legend: 'Days',
-                    legendOffset: 36,
-                    legendPosition: 'middle'
-                  }}
-                  axisLeft={{
-                    tickSize: 5,
-                    tickPadding: 5,
-                    tickRotation: 0,
-                    legend: 'Accuracy (%)',
-                    legendOffset: -40,
-                    legendPosition: 'middle'
-                  }}
-                  pointSize={8}
-                  pointColor={{ theme: 'background' }}
-                  pointBorderWidth={2}
-                  pointBorderColor={{ from: 'serieColor' }}
-                  pointLabelYOffset={-12}
-                  useMesh={true}
-                  enableSlices="x"
-                  sliceTooltip={({ slice }) => (
-                    <div
-                      style={{
-                        background: 'var(--background-primary)',
-                        padding: '12px 16px',
-                        border: '1px solid var(--border-color)',
-                        borderRadius: '8px',
-                        boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                        color: 'var(--text-primary)'
-                      }}
-                    >
-                      <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>
-                        {slice.points[0].data.x}
-                      </div>
-                      {slice.points.map((point) => (
-                        <div
-                          key={point.id}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '8px',
-                            marginBottom: '4px'
-                          }}
-                        >
-                          <div
-                            style={{
-                              width: '12px',
-                              height: '12px',
-                              backgroundColor: point.serieColor,
-                              borderRadius: '2px'
-                            }}
-                          />
-                          <span style={{ fontWeight: '500' }}>{point.serieId}:</span>
-                          <span>{point.data.yFormatted}%</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  legends={[
-                    {
-                      anchor: 'bottom-right',
-                      direction: 'column',
-                      justify: false,
-                      translateX: 100,
-                      translateY: 0,
-                      itemsSpacing: 0,
-                      itemDirection: 'left-to-right',
-                      itemWidth: 80,
-                      itemHeight: 20,
-                      itemOpacity: 0.75,
-                      symbolSize: 12,
-                      symbolShape: 'circle',
-                      symbolBorderColor: 'rgba(0, 0, 0, .5)',
-                      effects: [
-                        {
-                          on: 'hover',
-                          style: {
-                            itemBackground: 'rgba(0, 0, 0, .03)',
-                            itemOpacity: 1
-                          }
-                        }
-                      ]
-                    }
-                  ]}
-                  theme={{
-                    background: 'transparent',
-                    text: {
-                      fill: 'var(--text-secondary)',
-                      fontSize: 12
-                    },
-                    axis: {
-                      domain: {
-                        line: {
-                          stroke: 'var(--border-color)',
-                          strokeWidth: 1
-                        }
-                      },
-                      legend: {
-                        text: {
-                          fill: 'var(--text-primary)',
-                          fontSize: 12,
-                          fontWeight: 600
-                        }
-                      },
-                      ticks: {
-                        line: {
-                          stroke: 'var(--border-color)',
-                          strokeWidth: 1
-                        },
-                        text: {
-                          fill: 'var(--text-secondary)',
-                          fontSize: 11
-                        }
-                      }
-                    },
-                    grid: {
-                      line: {
-                        stroke: 'var(--border-color)',
-                        strokeWidth: 0.5,
-                        strokeOpacity: 0.5
-                      }
-                    },
-                    crosshair: {
-                      line: {
-                        stroke: 'var(--primary-500)',
-                        strokeWidth: 2,
-                        strokeOpacity: 0.75
-                      }
-                    }
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Data Table */}
-            <div className="card" style={{ backgroundColor: 'var(--background-secondary)', marginTop: '1rem' }}>
-              <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
-                Recent Predictions
-              </h3>
-              <div style={{ 
-                display: 'grid', 
-                gridTemplateColumns: 'repeat(4, 1fr)', 
-                gap: '0.5rem',
-                maxHeight: '200px',
-                overflow: 'auto'
-              }}>
-                <div style={{ fontWeight: 'bold', color: 'var(--text-primary)', padding: '0.5rem', borderBottom: '1px solid var(--border-color)' }}>Day</div>
-                <div style={{ fontWeight: 'bold', color: 'var(--text-primary)', padding: '0.5rem', borderBottom: '1px solid var(--border-color)' }}>Predicted</div>
-                <div style={{ fontWeight: 'bold', color: 'var(--text-primary)', padding: '0.5rem', borderBottom: '1px solid var(--border-color)' }}>Actual</div>
-                <div style={{ fontWeight: 'bold', color: 'var(--text-primary)', padding: '0.5rem', borderBottom: '1px solid var(--border-color)' }}>Error</div>
-                
-                {selectedModel.predictions.slice(-8).map((point, index) => (
-                  <React.Fragment key={index}>
-                    <div style={{ color: 'var(--text-secondary)', padding: '0.5rem' }}>{point.day}</div>
-                    <div style={{ color: 'var(--primary-600)', padding: '0.5rem' }}>{point.prediction}%</div>
-                    <div style={{ color: 'var(--accent-500)', padding: '0.5rem' }}>{point.actual}%</div>
-                    <div style={{ color: Math.abs(point.prediction - point.actual) > 5 ? 'var(--error-500)' : 'var(--success-500)', padding: '0.5rem' }}>
-                      {Math.abs(point.prediction - point.actual).toFixed(1)}%
-                    </div>
-                  </React.Fragment>
-                ))}
-              </div>
-            </div>
+            {/* Details */}
+            <h3 className="font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
+              Implementation Details
+            </h3>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              {selectedModel.details.map((detail, i) => (
+                <li key={i} style={{
+                  display: 'flex', alignItems: 'flex-start', gap: '0.5rem',
+                  padding: '0.4rem 0', color: 'var(--text-secondary)', fontSize: '0.85rem'
+                }}>
+                  <span style={{ color: selectedModel.color, fontWeight: 'bold', flexShrink: 0 }}>•</span>
+                  {detail}
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       )}

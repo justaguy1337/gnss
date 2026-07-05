@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard';
 import DataUpload from './pages/DataUpload';
 import ModelInsights from './pages/ModelInsights';
 import MetaLearner from './pages/MetaLearner';
+import Predictions from './pages/Predictions';
 import EarthVisualization from './pages/EarthVisualization';
 import ImpactBenefits from './pages/ImpactBenefits';
 import Research from './pages/Research';
@@ -19,6 +20,7 @@ function App() {
             <Route path="/upload" element={<DataUpload />} />
             <Route path="/insights" element={<ModelInsights />} />
             <Route path="/meta-learner" element={<MetaLearner />} />
+            <Route path="/predictions" element={<Predictions />} />
             <Route path="/earth" element={<EarthVisualization />} />
             <Route path="/impact" element={<ImpactBenefits />} />
             <Route path="/research" element={<Research />} />
