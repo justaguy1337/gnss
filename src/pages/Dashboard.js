@@ -42,48 +42,42 @@ const Dashboard = () => {
   const [usingDemoData, setUsingDemoData] = useState(false);
   const [selectedHorizon, setSelectedHorizon] = useState(1);
 
-  // Generate realistic demo data matching the API shape
+  // Generate flat 0 data matching the API shape if API is not available
   const generateDemoData = useCallback(() => {
     const demoPred = {};
     const demoEval = {};
 
     horizons.forEach(({ value: h }) => {
       const n = 80;
-      const preds = [], truths = [], uncertainties = [];
-      for (let i = 0; i < n; i++) {
-        const t = (i / n) * 2 * Math.PI;
-        const truth = 2.5 * Math.sin(t) + 0.8 * Math.cos(2 * t) + (Math.random() - 0.5) * 0.3;
-        const noise = (Math.random() - 0.5) * (0.08 + h * 0.005);
-        preds.push(truth + noise);
-        truths.push(truth);
-        uncertainties.push(0.08 + h * 0.015 + Math.random() * 0.03);
-      }
-      const residuals = truths.map((t, i) => t - preds[i]);
-      const rmse = Math.sqrt(residuals.reduce((s, r) => s + r * r, 0) / n);
-      const mae = residuals.reduce((s, r) => s + Math.abs(r), 0) / n;
+      const preds = Array(n).fill(0);
+      const truths = Array(n).fill(0);
+      const uncertainties = Array(n).fill(0);
+      const residuals = Array(n).fill(0);
+      const rmse = 0;
+      const mae = 0;
 
       demoPred[h] = {
         predictions: preds, ground_truth: truths, uncertainties,
         residuals, horizon: h, horizon_min: h * 15, n_predictions: n,
         rmse, mae,
         base_predictions: {
-          lstm_gru: preds.map(p => p + (Math.random() - 0.5) * 0.15),
-          transformer: preds.map(p => p + (Math.random() - 0.5) * 0.12),
-          xgboost: preds.map(p => p + (Math.random() - 0.5) * 0.20),
+          lstm_gru: preds,
+          transformer: preds,
+          xgboost: preds,
         }
       };
 
       demoEval[h] = {
         horizon: h, horizon_min: h * 15, rmse, mae,
-        r2_score: 0.97 - h * 0.003,
-        residual_mean: residuals.reduce((a, b) => a + b, 0) / n,
-        residual_std: Math.sqrt(residuals.reduce((s, r) => s + r * r, 0) / n),
-        shapiro_wilk: { p_value: 0.2 + Math.random() * 0.6, is_normal: true },
+        r2_score: 0,
+        residual_mean: 0,
+        residual_std: 0,
+        shapiro_wilk: { p_value: 1.0, is_normal: true },
       };
     });
 
     return { predictions: demoPred, evaluation: demoEval };
-  }, [horizons]);
+  }, []);
 
   useEffect(() => {
     let first = true;
@@ -196,15 +190,15 @@ const Dashboard = () => {
     const w = modelsInfo.horizons?.[h]?.weights || {};
     return {
       horizon: label,
-      'LSTM-GRU': parseFloat((w['LSTM-GRU'] || 0.33).toFixed(3)),
-      'Transformer': parseFloat((w['Transformer'] || 0.33).toFixed(3)),
-      'XGBoost': parseFloat((w['XGBoost'] || 0.33).toFixed(3)),
+      'LSTM-GRU': parseFloat((w['LSTM-GRU'] ?? 0).toFixed(3)),
+      'Transformer': parseFloat((w['Transformer'] ?? 0).toFixed(3)),
+      'XGBoost': parseFloat((w['XGBoost'] ?? 0).toFixed(3)),
     };
-  }) : horizons.map(({ label }, i) => ({
+  }) : horizons.map(({ label }) => ({
     horizon: label,
-    'LSTM-GRU': parseFloat((0.45 - i * 0.04).toFixed(3)),
-    'Transformer': parseFloat((0.25 + i * 0.05).toFixed(3)),
-    'XGBoost': parseFloat((0.30 - i * 0.01).toFixed(3)),
+    'LSTM-GRU': 0,
+    'Transformer': 0,
+    'XGBoost': 0,
   }));
 
   return (

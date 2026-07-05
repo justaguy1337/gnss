@@ -48,29 +48,19 @@ const Predictions = () => {
 
   const [usingDemoData, setUsingDemoData] = useState(false);
 
-  // Generate demo data if API is not available
+  // Generate flat 0 data if API is not available
   const generateDemoData = useCallback(() => {
     const demoData = {};
     const demoEval = {};
 
     horizons.forEach(({ value: h }) => {
       const n = 96;
-      const preds = [];
-      const truths = [];
-      const uncertainties = [];
-      const residuals = [];
-
-      for (let i = 0; i < n; i++) {
-        const t = (i / n) * 2 * Math.PI;
-        const truth = 2 * Math.sin(t) + 0.5 * Math.cos(2 * t) + (Math.random() - 0.5) * 0.3;
-        const noise = (Math.random() - 0.5) * (0.1 + h * 0.01);
-        const pred = truth + noise;
-        const unc = 0.1 + h * 0.02 + Math.random() * 0.05;
-        preds.push(pred);
-        truths.push(truth);
-        uncertainties.push(unc);
-        residuals.push(truth - pred);
-      }
+      const preds = Array(n).fill(0);
+      const truths = Array(n).fill(0);
+      const uncertainties = Array(n).fill(0);
+      const residuals = Array(n).fill(0);
+      const rmse = 0;
+      const mae = 0;
 
       demoData[h] = {
         predictions: preds,
@@ -81,52 +71,39 @@ const Predictions = () => {
         horizon_min: h * 15,
         n_predictions: n,
         base_predictions: {
-          lstm_gru: preds.map(p => p + (Math.random() - 0.5) * 0.2),
-          transformer: preds.map(p => p + (Math.random() - 0.5) * 0.15),
-          xgboost: preds.map(p => p + (Math.random() - 0.5) * 0.25),
+          lstm_gru: preds,
+          transformer: preds,
+          xgboost: preds,
         },
-        rmse: 0.05 + h * 0.01,
-        mae: 0.04 + h * 0.008,
+        rmse: rmse,
+        mae: mae,
       };
-
-      const resSorted = [...residuals].sort((a, b) => a - b);
-      const mean = residuals.reduce((a, b) => a + b, 0) / n;
-      const std = Math.sqrt(residuals.reduce((a, b) => a + (b - mean) ** 2, 0) / n);
 
       demoEval[h] = {
         horizon: h,
         horizon_min: h * 15,
-        rmse: demoData[h].rmse,
-        mae: demoData[h].mae,
-        r2_score: 0.95 - h * 0.005,
-        residual_mean: mean,
-        residual_std: std,
-        residual_skewness: 0.05 + (Math.random() - 0.5) * 0.1,
-        residual_kurtosis: -0.1 + (Math.random() - 0.5) * 0.2,
+        rmse: rmse,
+        mae: mae,
+        r2_score: 0,
+        residual_mean: 0,
+        residual_std: 0,
+        residual_skewness: 0,
+        residual_kurtosis: 0,
         shapiro_wilk: {
-          p_value: 0.15 + Math.random() * 0.5,
+          p_value: 1.0,
           is_normal: true,
         },
         histogram_data: {
-          bin_centers: Array.from({ length: 30 }, (_, i) => (i - 15) * std / 5 + mean),
-          counts: Array.from({ length: 30 }, (_, i) => {
-            const x = (i - 15) / 5;
-            return Math.exp(-x * x / 2) / (std * Math.sqrt(2 * Math.PI)) + Math.random() * 0.05;
-          }),
+          bin_centers: Array(30).fill(0),
+          counts: Array(30).fill(0),
           normal_curve: {
-            x: Array.from({ length: 50 }, (_, i) => (i - 25) * std / 8 + mean),
-            y: Array.from({ length: 50 }, (_, i) => {
-              const x = (i - 25) / 8;
-              return Math.exp(-x * x / 2) / (std * Math.sqrt(2 * Math.PI));
-            }),
+            x: Array(50).fill(0),
+            y: Array(50).fill(0),
           },
         },
         qq_data: {
-          theoretical: resSorted.map((_, i) => {
-            const p = (i + 0.5) / n;
-            return Math.sqrt(2) * inverseErf(2 * p - 1);
-          }),
-          sample: resSorted.map(r => (r - mean) / (std || 1)),
+          theoretical: Array(96).fill(0),
+          sample: Array(96).fill(0),
         },
       };
     });

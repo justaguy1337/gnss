@@ -14,17 +14,17 @@ const ModelInsights = () => {
   const [usingDemoData, setUsingDemoData] = useState(false);
 
   const generateDemoEval = useCallback(() => {
-    const horizons = [1, 2, 4, 8, 96];
+    const horizons = [1, 2, 4, 8, 16];
     const ev = {};
     horizons.forEach(h => {
       ev[h] = {
         horizon: h, horizon_min: h * 15,
-        rmse: 0.04 + h * 0.008 + Math.random() * 0.01,
-        mae: 0.03 + h * 0.006 + Math.random() * 0.008,
-        r2_score: 0.97 - h * 0.003 + (Math.random() - 0.5) * 0.01,
-        shapiro_wilk: { p_value: 0.15 + Math.random() * 0.6, is_normal: true },
-        residual_mean: (Math.random() - 0.5) * 0.02,
-        residual_std: 0.03 + h * 0.005,
+        rmse: 0,
+        mae: 0,
+        r2_score: 0,
+        shapiro_wilk: { p_value: 1.0, is_normal: true },
+        residual_mean: 0,
+        residual_std: 0,
       };
     });
     return ev;
@@ -148,20 +148,20 @@ const ModelInsights = () => {
 
   // Ridge weights per horizon
   const weightsData = modelsInfo
-    ? [1, 2, 4, 8, 96].map(h => {
+    ? [1, 2, 4, 8, 16].map(h => {
         const w = modelsInfo.horizons?.[h]?.weights || {};
         return {
           horizon: `${h * 15}min`,
-          'LSTM-GRU': parseFloat((w['LSTM-GRU'] || 0.33).toFixed(3)),
-          'Transformer': parseFloat((w['Transformer'] || 0.33).toFixed(3)),
-          'XGBoost': parseFloat((w['XGBoost'] || 0.33).toFixed(3)),
+          'LSTM-GRU': parseFloat((w['LSTM-GRU'] ?? 0).toFixed(3)),
+          'Transformer': parseFloat((w['Transformer'] ?? 0).toFixed(3)),
+          'XGBoost': parseFloat((w['XGBoost'] ?? 0).toFixed(3)),
         };
       })
-    : [1, 2, 4, 8, 96].map((h, i) => ({
+    : [1, 2, 4, 8, 16].map(h => ({
         horizon: `${h * 15}min`,
-        'LSTM-GRU': parseFloat((0.45 - i * 0.04).toFixed(3)),
-        'Transformer': parseFloat((0.25 + i * 0.05).toFixed(3)),
-        'XGBoost': parseFloat((0.30 - i * 0.01).toFixed(3)),
+        'LSTM-GRU': 0,
+        'Transformer': 0,
+        'XGBoost': 0,
       }));
 
 

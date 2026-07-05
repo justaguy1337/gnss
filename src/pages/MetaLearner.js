@@ -9,7 +9,7 @@ const MetaLearner = () => {
   const [showAnimations, setShowAnimations] = useState(false);
   const [evaluation, setEvaluation] = useState(null);
   const [modelsInfo, setModelsInfo] = useState(null);
-  const [usingDemoData, setUsingDemoData] = useState(false);
+  const [usingDemoData, setUsingDemoData] = useState(true);
 
   // Actual pipeline components from the paper
   const models = [
@@ -30,15 +30,15 @@ const MetaLearner = () => {
   ];
 
   const generateDemoData = useCallback(() => {
-    const horizons = [1, 2, 4, 8, 96];
+    const horizons = [1, 2, 4, 8, 16];
     const ev = {};
     horizons.forEach(h => {
       ev[h] = {
         horizon: h, horizon_min: h * 15,
-        rmse: 0.04 + h * 0.008,
-        mae: 0.03 + h * 0.006,
-        r2_score: 0.97 - h * 0.003,
-        shapiro_wilk: { p_value: 0.25, is_normal: true },
+        rmse: 0,
+        mae: 0,
+        r2_score: 0,
+        shapiro_wilk: { p_value: 1.0, is_normal: true },
       };
     });
 
@@ -48,14 +48,14 @@ const MetaLearner = () => {
       residual_model: 'Gaussian Process (Matérn 2.5 + Periodic)',
       horizons: {},
     };
-    horizons.forEach((h, i) => {
+    horizons.forEach((h) => {
       mi.horizons[h] = {
         weights: {
-          'LSTM-GRU': 0.45 - i * 0.04,
-          'Transformer': 0.25 + i * 0.05,
-          'XGBoost': 0.30 - i * 0.01,
+          'LSTM-GRU': 0,
+          'Transformer': 0,
+          'XGBoost': 0,
         },
-        alpha: 1.0,
+        alpha: 0,
       };
     });
 
@@ -99,11 +99,11 @@ const MetaLearner = () => {
 
   // Per-model "contribution" from Ridge weights (avg across horizons)
   const getModelScore = (modelName) => {
-    if (!modelsInfo?.horizons) return 33;
+    if (!modelsInfo?.horizons) return 0;
     const horizonKeys = Object.keys(modelsInfo.horizons);
-    if (horizonKeys.length === 0) return 33;
+    if (horizonKeys.length === 0) return 0;
     const sum = horizonKeys.reduce((s, h) => {
-      const w = modelsInfo.horizons[h]?.weights?.[modelName] || 0.33;
+      const w = modelsInfo.horizons[h]?.weights?.[modelName] ?? 0;
       return s + w;
     }, 0);
     return (sum / horizonKeys.length * 100).toFixed(1);
@@ -152,9 +152,9 @@ const MetaLearner = () => {
   const horizonWeights = modelsInfo?.horizons
     ? Object.entries(modelsInfo.horizons).map(([h, data]) => ({
         horizon: `${parseInt(h) * 15}min`,
-        lstm: (data.weights?.['LSTM-GRU'] || 0.33).toFixed(3),
-        transformer: (data.weights?.['Transformer'] || 0.33).toFixed(3),
-        xgboost: (data.weights?.['XGBoost'] || 0.33).toFixed(3),
+        lstm: (data.weights?.['LSTM-GRU'] ?? 0).toFixed(3),
+        transformer: (data.weights?.['Transformer'] ?? 0).toFixed(3),
+        xgboost: (data.weights?.['XGBoost'] ?? 0).toFixed(3),
       }))
     : [];
 
@@ -245,8 +245,18 @@ const MetaLearner = () => {
 
         {/* Compute Button */}
         {!isComputing && !showResults && (
-          <button className="simple-compute-btn" onClick={handleCompute}>
-            Compute Ensemble Accuracy
+          <button 
+            className="simple-compute-btn" 
+            onClick={handleCompute}
+            disabled={usingDemoData}
+            style={usingDemoData ? { 
+              background: '#9CA3AF', 
+              cursor: 'not-allowed', 
+              boxShadow: 'none',
+              opacity: 0.7 
+            } : {}}
+          >
+            {usingDemoData ? 'Backend Offline -- Cannot Compute' : 'Compute Ensemble Accuracy'}
           </button>
         )}
 
