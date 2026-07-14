@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import StandardScaler
-from typing import Tuple
+from typing import Tuple, Optional
 import os
 import sys
 
@@ -110,14 +110,26 @@ def train_transformer(
     X_seq_val: np.ndarray,
     y_val: np.ndarray,
     epochs: int = EPOCHS,
-    verbose: bool = True
+    verbose: bool = True,
+    pretrained_model: Optional["TimeSeriesTransformer"] = None,
+    pretrained_scaler_y: Optional[StandardScaler] = None,
+    ft_lr: float = 5e-5,
 ) -> Tuple[TimeSeriesTransformer, StandardScaler, list]:
     """
-    Train the Transformer model.
+    Train (or fine-tune) the Transformer model.
 
     Paper §III-D:
       "training runs the same way the LSTM-GRU setup does —
        same settings across the board"
+
+    Parameters
+    ----------
+    pretrained_model : TimeSeriesTransformer or None
+        If provided, fine-tunes from these weights at ft_lr.
+    pretrained_scaler_y : StandardScaler or None
+        If provided, reuses the existing target scaler.
+    ft_lr : float
+        Learning rate for fine-tuning.
 
     Returns
     -------
@@ -126,17 +138,31 @@ def train_transformer(
     history : list of (train_loss, val_loss)
     """
     seq_len = X_seq_tr.shape[1]
-    model = TimeSeriesTransformer(seq_len=seq_len).to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
+    # ── Initialise model and optimizer ──
+    if pretrained_model is not None:
+        model = pretrained_model
+        lr = ft_lr
+    else:
+        model = TimeSeriesTransformer(seq_len=seq_len).to(DEVICE)
+        lr = LEARNING_RATE
+
+    model = model.to(DEVICE)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=LR_PATIENCE
     )
     loss_fn = nn.MSELoss()
 
-    # Scale targets
-    scaler_y = StandardScaler()
-    y_tr_scaled = scaler_y.fit_transform(y_tr.reshape(-1, 1)).flatten()
-    y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
+    # ── Scale targets ──
+    if pretrained_scaler_y is not None:
+        scaler_y = pretrained_scaler_y
+        y_tr_scaled  = scaler_y.transform(y_tr.reshape(-1, 1)).flatten()
+        y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
+    else:
+        scaler_y = StandardScaler()
+        y_tr_scaled  = scaler_y.fit_transform(y_tr.reshape(-1, 1)).flatten()
+        y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
 
     # DataLoader
     ds_tr = TensorDataset(

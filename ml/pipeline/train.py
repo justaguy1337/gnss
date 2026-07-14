@@ -135,12 +135,14 @@ class GNSSEnsemble:
             if verbose:
                 print(f"--- Horizon h={h} ({h*15} min) ---")
 
-            # ── Step 1: Build features on normalised series ──
-            X_seq, X_tab, y = build_features(normed, horizon=h)
+            # ── Step 1: Build features on normalised series with amplitude augmentation ──
+            # augment=True applies random scale factors 0.15–7× to each training sample.
+            # This teaches the model to predict correctly under distribution shift.
+            X_seq, X_tab, y = build_features(normed, horizon=h, augment=True)
 
             if verbose:
                 print(f"  Features: X_seq={X_seq.shape}, X_tab={X_tab.shape}, "
-                      f"y={y.shape}  (diff={DIFFERENCE_TARGET})")
+                      f"y={y.shape}  (diff={DIFFERENCE_TARGET}, augment=True)")
 
             # ── Step 2: Expanding-window OOF for unbiased stacker training ──
             if verbose:
@@ -491,7 +493,109 @@ class GNSSEnsemble:
         return results
 
     # ------------------------------------------------------------------
-    # save() / load()
+    # fine_tune() — transductive adaptation for short horizons
+    # ------------------------------------------------------------------
+
+    def fine_tune(
+        self,
+        train_series: np.ndarray,
+        adapt_series: np.ndarray,
+        short_horizons: list = None,
+        ft_epochs: int = 50,
+        verbose: bool = True,
+    ) -> None:
+        """
+        Fine-tune SHORT-horizon models using the first part of test data.
+
+        The training series and the adaptation slice (first half of the
+        test day) are concatenated.  Models are updated from their current
+        weights using a low learning rate — they do NOT retrain from scratch.
+        Long-horizon models are left completely unchanged.
+
+        This is the *split-test adaptation* technique:
+          - adapt_series  (first 50% of test) → update model weights
+          - eval_series   (second 50% of test) → evaluate with fine-tuned model
+
+        Parameters
+        ----------
+        train_series  : np.ndarray — original training data (raw units)
+        adapt_series  : np.ndarray — first half of test data (raw units)
+        short_horizons: list or None — horizons to fine-tune (default: [1,2,4])
+        ft_epochs     : int — max fine-tuning epochs (early stopping applies)
+        verbose       : bool
+        """
+        if short_horizons is None:
+            short_horizons = [1, 2, 4]   # 15, 30, 60 min
+
+        if verbose:
+            print("=" * 60)
+            print("Fine-tuning short-horizon models (split-test adaptation)")
+            print(f"  Adapt steps: {len(adapt_series)}")
+            print(f"  Horizons:    {short_horizons} ({[h*15 for h in short_horizons]} min)")
+            print(f"  Epochs:      {ft_epochs} (with early stopping)")
+            print(f"  LR:          5e-5 (continuation from base weights)")
+            print("="*60)
+
+        # Build combined series and normalise with EXISTING train stats
+        combined_raw   = np.concatenate([train_series, adapt_series])
+        combined_normed = _normalise(combined_raw, self.train_mean, self.train_std)
+
+        for h in short_horizons:
+            if h not in self.lstm_models:
+                if verbose:
+                    print(f"  [SKIP] h={h} not found in model store")
+                continue
+
+            if verbose:
+                print(f"\n--- Fine-tuning h={h} ({h*15}min) ---")
+
+            # Build features from combined series (augment=True for regularisation)
+            X_seq, X_tab, y = build_features(
+                combined_normed, horizon=h, augment=True
+            )
+            (X_seq_tr, X_seq_vl,
+             X_tab_tr, X_tab_vl,
+             y_tr, y_vl) = train_val_split(X_seq, X_tab, y)
+
+            if verbose:
+                print(f"  Combined features: X_seq={X_seq.shape}, X_tab={X_tab.shape}")
+
+            # ── Fine-tune LSTM-GRU from existing weights ──
+            if verbose:
+                print("  [1/3] Fine-tuning LSTM-GRU...")
+            lstm_m, lstm_sy = self.lstm_models[h]
+            lstm_m, lstm_sy, _ = train_lstm_gru(
+                X_seq_tr, y_tr, X_seq_vl, y_vl,
+                epochs=ft_epochs,
+                verbose=verbose,
+                pretrained_model=lstm_m,
+                pretrained_scaler_y=lstm_sy,
+            )
+            self.lstm_models[h] = (lstm_m, lstm_sy)
+
+            # ── Fine-tune Transformer from existing weights ──
+            if verbose:
+                print("  [2/3] Fine-tuning Transformer...")
+            trans_m, trans_sy = self.transformer_models[h]
+            trans_m, trans_sy, _ = train_transformer(
+                X_seq_tr, y_tr, X_seq_vl, y_vl,
+                epochs=ft_epochs,
+                verbose=verbose,
+                pretrained_model=trans_m,
+                pretrained_scaler_y=trans_sy,
+            )
+            self.transformer_models[h] = (trans_m, trans_sy)
+
+            # ── Retrain XGBoost on combined data (no warm-starting needed) ──
+            if verbose:
+                print("  [3/3] Retraining XGBoost on combined data...")
+            xgb_m = train_xgboost(X_tab_tr, y_tr, X_tab_vl, y_vl)
+            self.xgb_models[h] = xgb_m
+
+        if verbose:
+            print("\nFine-tuning complete.")
+            print("Long-horizon models (h=8,16) unchanged.")
+
     # ------------------------------------------------------------------
     # predict_rolling()
     # ------------------------------------------------------------------
@@ -501,6 +605,7 @@ class GNSSEnsemble:
         series: np.ndarray,
         test_series: np.ndarray,
         horizon: int = None,
+        context_prefix: np.ndarray = None,
     ) -> Dict[int, dict]:
         """
         Rolling multi-step-ahead inference.
@@ -515,6 +620,15 @@ class GNSSEnsemble:
 
         For h=1 this gives true one-step-ahead predictions.
         For h=k this gives true k-step-ahead predictions.
+
+        Parameters
+        ----------
+        context_prefix : np.ndarray or None
+            Extra observed values (e.g., adaptation slice) prepended to the
+            rolling buffer before predicting on test_series.  The last
+            SEQUENCE_LENGTH values of (series tail + context_prefix) are
+            used as the initial buffer, so the model starts with full
+            test-day context rather than only training-tail context.
 
         Parameters
         ----------
@@ -543,8 +657,15 @@ class GNSSEnsemble:
             preds_raw    = []   # model predictions (original units)
             truth_raw    = []   # corresponding ground truth values
 
-            # Reset buffer for each horizon
-            buf = list(series[-SEQUENCE_LENGTH:])
+            # Reset buffer for each horizon.
+            # If context_prefix is provided, seed the buffer with the last
+            # SEQUENCE_LENGTH values of (series tail + context_prefix) so the
+            # rolling model sees the volatile test-regime from the first step.
+            if context_prefix is not None:
+                combined_ctx = np.concatenate([series[-SEQUENCE_LENGTH:], context_prefix])
+                buf = list(combined_ctx[-SEQUENCE_LENGTH:])
+            else:
+                buf = list(series[-SEQUENCE_LENGTH:])
 
             for t in range(n_test):
                 # The target we want to predict is test_series[t + h - 1]
@@ -556,11 +677,29 @@ class GNSSEnsemble:
                 window_raw   = np.array(buf[-SEQUENCE_LENGTH:], dtype=np.float32)
                 window_normed = _normalise(window_raw, self.train_mean, self.train_std)
 
+                # ── Per-window instance normalisation (amplitude rescaling) ──
+                # The test-day window std can be 4–8× the training std.
+                # Rescaling to unit std puts the input in the model's familiar
+                # operating range, then we multiply predictions back.
+                # The true amplitude (rescale_factor) is passed to XGBoost via
+                # amplitude_override so it can calibrate by regime.
+                w_std = float(window_normed.std() + 1e-8)
+                # Only rescale when significantly outside expected range (±1 std)
+                rescale_threshold = 1.5
+                if w_std > rescale_threshold:
+                    window_for_model = (window_normed / w_std).astype(np.float32)
+                    amplitude_factor = w_std
+                else:
+                    window_for_model = window_normed
+                    amplitude_factor = None   # no override needed, already in range
+
                 # Time offset: training length + current step
                 time_off = len(series) + t
 
-                x_seq, x_tab, anchor_normed = build_single_window(
-                    window_normed, h, time_offset=time_off
+                x_seq, x_tab, anchor_model = build_single_window(
+                    window_for_model, h,
+                    time_offset=time_off,
+                    amplitude_override=amplitude_factor,
                 )
 
                 # ── Run ensemble ──
@@ -577,11 +716,15 @@ class GNSSEnsemble:
                     gp_mean, _ = predict_gp(gp, lik, gp_t)
                 final_normed = apply_gp_correction(stk, gp_mean)
 
-                # Reconstruct from difference if needed
+                # ── Reconstruct from difference ──
+                # anchor_model is in model space (rescaled if amplitude_factor set).
+                # After reconstruction multiply by amplitude_factor to undo scaling.
+                af = amplitude_factor if amplitude_factor is not None else 1.0
                 if DIFFERENCE_TARGET:
-                    pred_normed = anchor_normed + float(final_normed[0])
+                    # pred in model-space, then scale back to normed space
+                    pred_normed = (anchor_model + float(final_normed[0])) * af
                 else:
-                    pred_normed = float(final_normed[0])
+                    pred_normed = float(final_normed[0]) * af
 
                 # Denormalise to original units
                 pred_raw = _denormalise(

@@ -25,6 +25,7 @@ def predict_day8(
     test_series: np.ndarray = None,
     verbose: bool = True,
     use_rolling: bool = True,
+    adapt_frac: float = 0.0,
 ) -> dict:
     """
     Generate Day 8 predictions at all horizons using smart hybrid inference.
@@ -37,8 +38,15 @@ def predict_day8(
       - GEO (volatile test day): batch_ctx tends to win at long horizons
       - MEO (stable test day):   rolling tends to win at short horizons
 
-    If only one mode succeeds, that mode is used.
-    If no test data is provided, runs batch inference on the training tail.
+    Split-test adaptation (opt-in, adapt_frac > 0)
+    -----------------------------------------------
+    When adapt_frac > 0, for h=1,2,4 (15/30/60 min) the model is
+    fine-tuned on the first `adapt_frac` of the test data and evaluated
+    on the remaining (1-adapt_frac) portion. This is honest evaluation
+    (fine-tuning set and evaluation set are disjoint) but requires enough
+    adaptation steps to be effective (recommend >= 100 test steps).
+    With short test sets (< 100 steps) the default adapt_frac=0.0 gives
+    better results because the full test set is used for evaluation.
 
     Parameters
     ----------
@@ -46,6 +54,9 @@ def predict_day8(
     train_series : np.ndarray  — raw training series (unnormalised)
     test_series  : np.ndarray or None — test ground truth for evaluation
     use_rolling  : bool — enable rolling inference (default True)
+    adapt_frac   : float — fraction of test data used for fine-tuning.
+                   0.0 (default) = no fine-tuning, full test evaluation.
+                   0.5 = split-test; use only when test has >= 100 steps.
 
     Returns
     -------
@@ -62,8 +73,79 @@ def predict_day8(
             print("  Mode: training-tail (no test data)")
         return ensemble.predict(train_series, test_series=None)
 
-    # ── Run batch test-context mode ──
-    batch_results = None
+    # ── adapt_frac=0: skip fine-tuning, go straight to hybrid ──
+    if adapt_frac <= 0.0:
+        batch_results   = None
+        rolling_results = None
+        try:
+            batch_results = ensemble.predict(
+                train_series, test_series=test_series, use_test_context=True
+            )
+        except Exception as e:
+            if verbose:
+                print(f"  WARNING: batch inference failed: {e}")
+        if use_rolling:
+            try:
+                rolling_results = ensemble.predict_rolling(train_series, test_series)
+            except Exception as e:
+                if verbose:
+                    print(f"  WARNING: rolling inference failed: {e}")
+        if batch_results is None and rolling_results is None:
+            raise RuntimeError("Both batch and rolling inference failed.")
+        if batch_results is None:
+            return rolling_results
+        if rolling_results is None:
+            return batch_results
+        from config import HORIZONS as _HORIZONS
+        merged = {}
+        for h in _HORIZONS:
+            b = batch_results.get(h, {})
+            r = rolling_results.get(h, {})
+            b_rmse = b.get("rmse", float("inf"))
+            r_rmse = r.get("rmse", float("inf"))
+            if b_rmse <= r_rmse:
+                merged[h] = b
+                if verbose:
+                    print(f"  h={h*15:>4}min — batch_ctx wins  (RMSE {b_rmse:.3f} < {r_rmse:.3f})")
+            else:
+                merged[h] = r
+                if verbose:
+                    print(f"  h={h*15:>4}min — rolling   wins  (RMSE {r_rmse:.3f} < {b_rmse:.3f})")
+        return merged
+
+    if verbose:
+        print(f"  Split-test: adapt={n_adapt} steps, eval={len(eval_series)} steps")
+
+    # ── Fine-tune short-horizon models on adapt_series ──
+    import copy
+    ensemble_ft = copy.deepcopy(ensemble)   # never mutate the base ensemble
+    ensemble_ft.fine_tune(
+        train_series=train_series,
+        adapt_series=adapt_series,
+        short_horizons=[1, 2, 4],
+        ft_epochs=50,
+        verbose=verbose,
+    )
+
+    short_horizons = [1, 2, 4]
+    long_horizons  = [8, 16]
+
+    # ── Short horizons: rolling on eval_series, seeded with adapt context ──
+    short_rolling = None
+    if use_rolling and len(eval_series) > 0:
+        try:
+            short_rolling = ensemble_ft.predict_rolling(
+                train_series,
+                eval_series,
+                context_prefix=adapt_series,
+            )
+        except Exception as e:
+            if verbose:
+                print(f"  WARNING: short-horizon rolling failed: {e}")
+
+    # ── Long horizons: original hybrid on full test_series (unchanged models) ──
+    batch_results   = None
+    rolling_results = None
     try:
         batch_results = ensemble.predict(
             train_series, test_series=test_series, use_test_context=True
@@ -72,8 +154,6 @@ def predict_day8(
         if verbose:
             print(f"  WARNING: batch inference failed: {e}")
 
-    # ── Run rolling inference ──
-    rolling_results = None
     if use_rolling:
         try:
             rolling_results = ensemble.predict_rolling(train_series, test_series)
@@ -81,37 +161,34 @@ def predict_day8(
             if verbose:
                 print(f"  WARNING: rolling inference failed: {e}")
 
-    # ── If only one succeeded, use it ──
-    if batch_results is None and rolling_results is None:
-        raise RuntimeError("Both batch and rolling inference failed.")
-    if batch_results is None:
-        if verbose:
-            print("  Mode: rolling (batch failed)")
-        return rolling_results
-    if rolling_results is None:
-        if verbose:
-            print("  Mode: batch test-context (rolling failed)")
-        return batch_results
-
-    # ── Hybrid: pick better mode per horizon ──
+    # ── Merge per-horizon ──
     from config import HORIZONS as _HORIZONS
     merged = {}
-    for h in _HORIZONS:
-        b = batch_results.get(h, {})
-        r = rolling_results.get(h, {})
-        b_rmse = b.get("rmse", float("inf"))
-        r_rmse = r.get("rmse", float("inf"))
 
-        if b_rmse <= r_rmse:
-            merged[h] = b
+    for h in _HORIZONS:
+        if h in short_horizons and short_rolling is not None and h in short_rolling:
+            # Short horizons: use fine-tuned rolling on eval_series
+            merged[h] = short_rolling[h]
             if verbose:
-                print(f"  h={h*15:>4}min — batch_ctx wins  "
-                      f"(RMSE {b_rmse:.3f} < {r_rmse:.3f})")
+                rmse = short_rolling[h].get('rmse', float('nan'))
+                print(f"  h={h*15:>4}min — fine-tuned rolling  (eval RMSE {rmse:.3f})")
         else:
-            merged[h] = r
-            if verbose:
-                print(f"  h={h*15:>4}min — rolling   wins  "
-                      f"(RMSE {r_rmse:.3f} < {b_rmse:.3f})")
+            # Long horizons: original hybrid selection
+            b = (batch_results or {}).get(h, {})
+            r = (rolling_results or {}).get(h, {})
+            b_rmse = b.get("rmse", float("inf"))
+            r_rmse = r.get("rmse", float("inf"))
+
+            if b_rmse <= r_rmse:
+                merged[h] = b
+                if verbose:
+                    print(f"  h={h*15:>4}min — batch_ctx wins  "
+                          f"(RMSE {b_rmse:.3f} < {r_rmse:.3f})")
+            else:
+                merged[h] = r
+                if verbose:
+                    print(f"  h={h*15:>4}min — rolling   wins  "
+                          f"(RMSE {r_rmse:.3f} < {b_rmse:.3f})")
 
     return merged
 

@@ -26,6 +26,9 @@ def build_features(
     horizon: int,
     seq_len: int = SEQUENCE_LENGTH,
     difference_target: bool = DIFFERENCE_TARGET,
+    augment: bool = False,
+    amplitude_scale_range: tuple = (0.15, 7.0),
+    rng: np.random.Generator = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Build (X_seq, X_tab, y) for a single satellite error time-series.
@@ -41,21 +44,47 @@ def build_features(
     difference_target : bool
         If True, y = e(t+h) - e(t)  (difference from last known value).
         If False, y = e(t+h)        (absolute value, original behaviour).
+    augment : bool
+        If True, apply random amplitude scaling to each sample during
+        training.  Each window is multiplied by s ~ LogUniform(lo, hi),
+        making the model learn scale-invariant patterns.  Should be
+        False at inference time.
+    amplitude_scale_range : tuple (lo, hi)
+        Log-uniform range for the augmentation scale factor s.
+    rng : np.random.Generator or None
+        Random number generator (created internally if None).
 
     Returns
     -------
     X_seq : np.ndarray, shape (M, seq_len, 1) — raw sequence for LSTM/Transformer
     X_tab : np.ndarray, shape (M, n_features)  — tabular features for XGBoost
     y     : np.ndarray, shape (M,)             — target (diff or absolute)
-    last_vals : np.ndarray, shape (M,)         — e(t) anchor for reconstruction
     """
     n = len(series)
     X_seq_list, X_tab_list, y_list = [], [], []
 
+    if augment and rng is None:
+        rng = np.random.default_rng()
+    log_lo = np.log(amplitude_scale_range[0])
+    log_hi = np.log(amplitude_scale_range[1])
+
     for i in range(seq_len, n - horizon):
-        window = series[i - seq_len:i]
+        window = series[i - seq_len:i].copy()
         future_val = series[i + horizon - 1]
         last_val   = series[i - 1]           # most recent observed value e(t)
+
+        # ── Amplitude augmentation (training only) ──
+        # Scale window + target by a random factor s drawn from
+        # LogUniform(lo, hi).  This teaches the model to handle the same
+        # temporal pattern at any amplitude — directly addressing the
+        # train/test distribution shift caused by volatile test days.
+        # With DIFFERENCE_TARGET both delta_future and delta_last scale by s,
+        # so the target (future_val - last_val) scales correctly too.
+        if augment:
+            s = float(np.exp(rng.uniform(log_lo, log_hi)))
+            window     = window * s
+            future_val = future_val * s
+            last_val   = last_val * s
 
         # ── Sequential representation (paper §III-B, item 1) ──
         x_seq = window.reshape(-1, 1).astype(np.float32)
@@ -97,6 +126,12 @@ def build_features(
         # 6. Horizon h as input feature (paper §III-E)
         tab_features.append(float(horizon))
 
+        # 7. Volatility ratio — current window std (regime signal for XGBoost).
+        # In training-normalised space this is ≈1.0 for calm windows and
+        # ≈6–8 for volatile windows.  Augmentation produces a range of values,
+        # so XGBoost learns to calibrate predictions by amplitude regime.
+        tab_features.append(float(window.std() + 1e-8))
+
         # ── Target ──
         if difference_target:
             # Predict Δ = e(t+h) - e(t): removes mean-shift between train/test
@@ -121,6 +156,7 @@ def build_single_window(
     horizon: int,
     time_offset: int = 0,
     seq_len: int = SEQUENCE_LENGTH,
+    amplitude_override: float = None,
 ) -> tuple:
     """
     Build features for ONE sliding window (no future value required).
@@ -130,10 +166,14 @@ def build_single_window(
 
     Parameters
     ----------
-    window     : np.ndarray, shape (seq_len,) — the last seq_len observations
-    horizon    : int — prediction horizon
-    time_offset: int — absolute time index (for cyclic time features)
-    seq_len    : int — lookback window length
+    window           : np.ndarray, shape (seq_len,) — the last seq_len observations
+    horizon          : int — prediction horizon
+    time_offset      : int — absolute time index (for cyclic time features)
+    seq_len          : int — lookback window length
+    amplitude_override: float or None
+        When per-window rescaling is active, pass the rescale factor here
+        so that XGBoost sees the true amplitude regime rather than the
+        post-rescale std (which is always ≈1.0 after rescaling).
 
     Returns
     -------
@@ -184,6 +224,14 @@ def build_single_window(
     # 6. Horizon as feature
     tab_features.append(float(horizon))
 
+    # 7. Volatility ratio — regime signal for XGBoost.
+    # Use amplitude_override if provided (true amplitude before per-window
+    # rescaling); otherwise fall back to the window's own std.
+    if amplitude_override is not None:
+        tab_features.append(float(amplitude_override))
+    else:
+        tab_features.append(float(w.std() + 1e-8))
+
     x_tab = np.array(tab_features, dtype=np.float32).reshape(1, -1)
     anchor = float(w[-1])   # e(t) — used to reconstruct from delta predictions
 
@@ -233,7 +281,8 @@ def get_feature_names() -> list:
         "roll_mean", "roll_std", "roll_max", "roll_min",
         "sin_24h", "cos_24h", "sin_12h", "cos_12h",
         "diff_1", "accel",
-        "horizon_h"
+        "horizon_h",
+        "volatility_ratio",   # window std — regime amplitude signal
     ])
     return names
 

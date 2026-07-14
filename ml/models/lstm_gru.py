@@ -95,10 +95,13 @@ def train_lstm_gru(
     X_seq_val: np.ndarray,
     y_val: np.ndarray,
     epochs: int = EPOCHS,
-    verbose: bool = True
-) -> Tuple[LSTMGRUModel, StandardScaler, list]:
+    verbose: bool = True,
+    pretrained_model: Optional["LSTMGRUModel"] = None,
+    pretrained_scaler_y: Optional[StandardScaler] = None,
+    ft_lr: float = 5e-5,
+) -> Tuple["LSTMGRUModel", StandardScaler, list]:
     """
-    Train the LSTM-GRU model.
+    Train (or fine-tune) the LSTM-GRU model.
 
     Paper §III-C:
       "Adam optimizer together with gradient clipping"
@@ -106,23 +109,47 @@ def train_lstm_gru(
       "When that held-back portion shows no real progress,
        the system slows down on its own"
 
+    Parameters
+    ----------
+    pretrained_model : LSTMGRUModel or None
+        If provided, fine-tunes from these weights (transfer learning).
+        Uses ft_lr instead of LEARNING_RATE for the optimizer.
+    pretrained_scaler_y : StandardScaler or None
+        If provided, skips refitting the target scaler (keeps training
+        distribution scale consistent with the existing model).
+    ft_lr : float
+        Learning rate used when fine-tuning from pretrained_model.
+
     Returns
     -------
     model : LSTMGRUModel
     scaler_y : StandardScaler (for inverse transform at prediction)
     history : list of (train_loss, val_loss) per epoch
     """
-    model = LSTMGRUModel().to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    # ── Initialise model and optimizer ──
+    if pretrained_model is not None:
+        model = pretrained_model   # continue from existing weights
+        lr = ft_lr
+    else:
+        model = LSTMGRUModel().to(DEVICE)
+        lr = LEARNING_RATE
+
+    model = model.to(DEVICE)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=LR_PATIENCE
     )
     loss_fn = nn.MSELoss()
 
-    # Scale targets (paper §III-C)
-    scaler_y = StandardScaler()
-    y_tr_scaled = scaler_y.fit_transform(y_tr.reshape(-1, 1)).flatten()
-    y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
+    # ── Scale targets ──
+    if pretrained_scaler_y is not None:
+        scaler_y = pretrained_scaler_y   # reuse existing scale
+        y_tr_scaled  = scaler_y.transform(y_tr.reshape(-1, 1)).flatten()
+        y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
+    else:
+        scaler_y = StandardScaler()
+        y_tr_scaled  = scaler_y.fit_transform(y_tr.reshape(-1, 1)).flatten()
+        y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
 
     # DataLoader
     ds_tr = TensorDataset(
@@ -177,9 +204,9 @@ def train_lstm_gru(
                 break
 
         if verbose and (epoch + 1) % 10 == 0:
-            lr = optimizer.param_groups[0]['lr']
+            lr_now = optimizer.param_groups[0]['lr']
             print(f"    Epoch {epoch+1:>3}/{epochs} | "
-                  f"train={train_loss:.6f} val={val_loss:.6f} lr={lr:.1e}")
+                  f"train={train_loss:.6f} val={val_loss:.6f} lr={lr_now:.1e}")
 
     if best_state is not None:
         model.load_state_dict(best_state)
