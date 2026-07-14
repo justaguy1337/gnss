@@ -18,7 +18,8 @@ import {
 import {
   TrendingUp,
   Download,
-  Activity
+  Activity,
+  Upload
 } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000/api';
@@ -111,10 +112,21 @@ const Predictions = () => {
     return { predictions: demoData, evaluation: demoEval };
   }, []);
 
+  const [apiStatus, setApiStatus] = useState(null);
+
   useEffect(() => {
     let first = true;
     const fetchData = async () => {
       try {
+        const statusRes = await fetch(`${API_BASE}/status`).catch(() => null);
+        if (statusRes?.ok) {
+          const status = await statusRes.json();
+          setApiStatus(status);
+          if (!status.test_data_uploaded) {
+            if (first) { setLoading(false); first = false; }
+            return;
+          }
+        }
         const [predRes, evalRes] = await Promise.all([
           fetch(`${API_BASE}/predict/all`),
           fetch(`${API_BASE}/evaluation`),
@@ -154,8 +166,39 @@ const Predictions = () => {
     );
   }
 
-  const currentPred = predictions?.[selectedHorizon];
-  const currentEval = evaluation?.[selectedHorizon];
+  if (apiStatus?.test_data_uploaded === false) {
+    return (
+      <div className="animate-fade-in" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60vh' }}>
+        <div style={{ textAlign: 'center', maxWidth: '420px' }}>
+          <div style={{
+            width: '80px', height: '80px', borderRadius: '50%',
+            backgroundColor: 'var(--primary-100)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            margin: '0 auto 1.5rem',
+          }}>
+            <Upload size={36} style={{ color: 'var(--primary-500)' }} />
+          </div>
+          <h2 style={{ color: 'var(--text-primary)', marginBottom: '0.75rem', fontSize: '1.5rem', fontWeight: '600' }}>
+            No Test Data Yet
+          </h2>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', lineHeight: '1.6' }}>
+            Upload a test CSV to generate multi-horizon predictions.
+          </p>
+          <a href="/upload" style={{
+            display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+            backgroundColor: 'var(--primary-500)', color: 'white',
+            padding: '0.65rem 1.5rem', borderRadius: '0.5rem',
+            fontWeight: '500', textDecoration: 'none', fontSize: '0.95rem',
+          }}>
+            <Upload size={16} /> Go to Data Upload
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  const currentPred = predictions?.[String(selectedHorizon)];
+  const currentEval = evaluation?.[String(selectedHorizon)];
 
   // Prepare time-series chart data
   const timeSeriesData = currentPred ? currentPred.predictions.map((pred, i) => ({
@@ -181,7 +224,7 @@ const Predictions = () => {
 
   // Horizon comparison data
   const horizonCompData = horizons.map(({ value: h, label }) => {
-    const ev = evaluation?.[h];
+    const ev = evaluation?.[String(h)];
     return {
       horizon: label,
       rmse: ev ? parseFloat(ev.rmse.toFixed(5)) : 0,

@@ -20,7 +20,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Wifi,
-  WifiOff
+  WifiOff,
+  Upload
 } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000/api';
@@ -90,7 +91,15 @@ const Dashboard = () => {
           fetch(`${API_BASE}/models`).catch(() => null),
         ]);
 
-        if (statusRes?.ok) setApiStatus(await statusRes.json());
+        if (statusRes?.ok) {
+          const status = await statusRes.json();
+          setApiStatus(status);
+          // If API is reachable but test data not yet uploaded, don't use demo data
+          if (!status.test_data_uploaded) {
+            if (first) { setLoading(false); first = false; }
+            return;
+          }
+        }
         if (predRes?.ok && evalRes?.ok) {
           setPredictions(await predRes.json());
           setEvaluation(await evalRes.json());
@@ -126,12 +135,54 @@ const Dashboard = () => {
     );
   }
 
+  // Show upload prompt if API is reachable but no test data uploaded yet
+  if (apiStatus?.test_data_uploaded === false) {
+    return (
+      <div className="animate-fade-in" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60vh' }}>
+        <div style={{ textAlign: 'center', maxWidth: '420px' }}>
+          <div style={{
+            width: '80px', height: '80px', borderRadius: '50%',
+            backgroundColor: 'var(--primary-100)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            margin: '0 auto 1.5rem',
+          }}>
+            <Upload size={36} style={{ color: 'var(--primary-500)' }} />
+          </div>
+          <h2 style={{ color: 'var(--text-primary)', marginBottom: '0.75rem', fontSize: '1.5rem', fontWeight: '600' }}>
+            No Test Data Yet
+          </h2>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', lineHeight: '1.6' }}>
+            The models are trained and ready.
+            Upload a test CSV to generate predictions and see the dashboard.
+          </p>
+          <a
+            href="/upload"
+            onClick={(e) => { e.preventDefault(); window.location.hash = ''; window.location.pathname = '/upload'; }}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+              backgroundColor: 'var(--primary-500)', color: 'white',
+              padding: '0.65rem 1.5rem', borderRadius: '0.5rem',
+              fontWeight: '500', textDecoration: 'none', fontSize: '0.95rem',
+            }}
+          >
+            <Upload size={16} /> Go to Data Upload
+          </a>
+          {apiStatus?.status === 'trained' && (
+            <p style={{ marginTop: '1rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              ✓ {apiStatus.trained_satellites?.join(' + ')} models ready
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // Compute summary metrics from evaluation data
   const bestHorizon = evaluation ? Object.values(evaluation).reduce((best, ev) =>
     (ev.rmse < best.rmse ? ev : best), { rmse: Infinity }) : null;
   const avgR2 = evaluation ? (Object.values(evaluation).reduce((s, ev) => s + (ev.r2_score || 0), 0) / Object.keys(evaluation).length) : 0;
   const allNormal = evaluation ? Object.values(evaluation).every(ev => ev.shapiro_wilk?.is_normal) : false;
-  const nSatellites = apiStatus?.has_data ? 6 : 6; // from dataset
+  const nSatellites = apiStatus?.trained_satellites?.length ? apiStatus.trained_satellites.length * 3 : 6;
 
   const metrics = [
     {
@@ -165,7 +216,7 @@ const Dashboard = () => {
   ];
 
   // Build time-series data for selected horizon
-  const currentPred = predictions?.[selectedHorizon];
+  const currentPred = predictions?.[String(selectedHorizon)];
   const timeSeriesData = currentPred ? currentPred.predictions.slice(0, 48).map((pred, i) => ({
     time: `${String(Math.floor(i * 15 / 60)).padStart(2, '0')}:${String((i * 15) % 60).padStart(2, '0')}`,
     predicted: parseFloat(pred.toFixed(3)),
@@ -177,7 +228,7 @@ const Dashboard = () => {
 
   // Horizon comparison bar data
   const horizonCompData = horizons.map(({ value: h, label }) => {
-    const ev = evaluation?.[h];
+    const ev = evaluation?.[String(h)];
     return {
       horizon: label,
       rmse: ev ? parseFloat(ev.rmse.toFixed(5)) : 0,
@@ -187,7 +238,7 @@ const Dashboard = () => {
 
   // Ridge weight data for stacker visualization
   const ridgeWeightData = modelsInfo ? horizons.map(({ value: h, label }) => {
-    const w = modelsInfo.horizons?.[h]?.weights || {};
+    const w = modelsInfo.horizons?.[String(h)]?.weights || {};
     return {
       horizon: label,
       'LSTM-GRU': parseFloat((w['LSTM-GRU'] ?? 0).toFixed(3)),
@@ -224,6 +275,20 @@ const Dashboard = () => {
               {usingDemoData ? 'Demo Mode' : 'API Connected'}
             </span>
           </div>
+          {apiStatus?.active_satellite && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '0.4rem',
+              padding: '0.25rem 0.65rem',
+              backgroundColor: 'var(--primary-100)',
+              borderRadius: '999px',
+              border: '1px solid var(--primary-300)',
+            }}>
+              <Satellite size={13} style={{ color: 'var(--primary-600)' }} />
+              <span style={{ color: 'var(--primary-700)', fontSize: '0.75rem', fontWeight: '600' }}>
+                {apiStatus.active_satellite} test data
+              </span>
+            </div>
+          )}
           {/* Horizon quick selector */}
           <div style={{ display: 'flex', gap: '0.25rem' }}>
             {horizons.map(({ value, label }) => (

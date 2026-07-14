@@ -6,6 +6,11 @@ Comprehensive evaluation matching competition criteria:
   - Normality tests: Shapiro-Wilk, Anderson-Darling, K-S test
   - Q-Q plots and histogram generation
   - Skewness and kurtosis measurements
+
+v2 additions:
+  - Naive baselines: persistence (last value) and mean prediction
+  - MASE: Mean Absolute Scaled Error relative to persistence baseline
+  - Relative improvement over naive baselines
 """
 
 import numpy as np
@@ -18,19 +23,73 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import HORIZONS, RESULTS_DIR
 
 
+def naive_baselines(
+    y_true: np.ndarray,
+    train_series: np.ndarray = None,
+) -> dict:
+    """
+    Compute naive baseline metrics for comparison.
+
+    Baselines:
+      - Persistence: always predict the last observed value
+      - Mean:        always predict the training mean
+
+    Parameters
+    ----------
+    y_true       : ground truth test values
+    train_series : training series (used for persistence anchor and mean)
+
+    Returns
+    -------
+    dict with rmse/mae for each baseline, plus MASE denominator
+    """
+    n = len(y_true)
+    results = {}
+
+    if train_series is not None and len(train_series) > 0:
+        last_val  = float(train_series[-1])
+        train_mean = float(train_series.mean())
+    else:
+        last_val   = float(y_true[0]) if n > 0 else 0.0
+        train_mean = float(y_true.mean()) if n > 0 else 0.0
+
+    # Persistence baseline
+    p_pred = np.full(n, last_val, dtype=np.float32)
+    p_res  = y_true - p_pred
+    results["persistence"] = {
+        "rmse": float(np.sqrt(np.mean(p_res ** 2))),
+        "mae":  float(np.mean(np.abs(p_res))),
+    }
+
+    # Mean baseline
+    m_pred = np.full(n, train_mean, dtype=np.float32)
+    m_res  = y_true - m_pred
+    results["mean"] = {
+        "rmse": float(np.sqrt(np.mean(m_res ** 2))),
+        "mae":  float(np.mean(np.abs(m_res))),
+    }
+
+    # MASE denominator = MAE of persistence (used to scale model MAE)
+    results["mase_denominator"] = results["persistence"]["mae"] + 1e-10
+
+    return results
+
+
 def evaluate_predictions(
     y_true: np.ndarray,
     y_pred: np.ndarray,
-    horizon: int = None
+    horizon: int = None,
+    train_series: np.ndarray = None,
 ) -> dict:
     """
     Full evaluation of prediction quality.
 
     Parameters
     ----------
-    y_true : ground truth values
-    y_pred : predicted values
-    horizon : prediction horizon (for labeling)
+    y_true       : ground truth values
+    y_pred       : predicted values
+    horizon      : prediction horizon (for labeling)
+    train_series : training series used for naive baselines and MASE
 
     Returns
     -------
@@ -90,6 +149,17 @@ def evaluate_predictions(
     except Exception:
         ad_stat, ad_critical_5pct, ad_is_normal = 0.0, 0.0, False
 
+    # ── Naive baselines + MASE ──
+    baselines = naive_baselines(y_true, train_series)
+    persist_mae = baselines["mase_denominator"]
+    mase = mae / persist_mae
+
+    # Relative improvement over persistence baseline
+    rel_rmse_improve = (baselines["persistence"]["rmse"] - rmse) / \
+                        (baselines["persistence"]["rmse"] + 1e-10) * 100.0
+    rel_mae_improve  = (baselines["persistence"]["mae"] - mae) / \
+                        (baselines["persistence"]["mae"] + 1e-10) * 100.0
+
     return {
         "horizon": horizon,
         "horizon_min": horizon * 15 if horizon else None,
@@ -98,6 +168,11 @@ def evaluate_predictions(
         "rmse": rmse,
         "mae": mae,
         "r2_score": r2,
+        "mase": float(mase),
+        "rmse_vs_persistence_pct": float(rel_rmse_improve),
+        "mae_vs_persistence_pct":  float(rel_mae_improve),
+        # Naive baselines
+        "baselines": baselines,
         # Residual distribution
         "residual_mean": res_mean,
         "residual_std": res_std,
@@ -188,14 +263,17 @@ def generate_histogram_data(
 
 def full_evaluation(
     predictions: dict,
-    verbose: bool = True
+    train_series: np.ndarray = None,
+    verbose: bool = True,
 ) -> dict:
     """
     Run full evaluation across all horizons.
 
     Parameters
     ----------
-    predictions : dict — output from predict_day8()
+    predictions  : dict — output from predict_day8()
+    train_series : np.ndarray or None — training data for MASE / baseline computation
+    verbose      : bool
 
     Returns
     -------
@@ -215,23 +293,34 @@ def full_evaluation(
         y_pred = np.array(pred_info["predictions"][:len(y_true)])
 
         # Metrics
-        metrics = evaluate_predictions(y_true, y_pred, horizon=h)
+        metrics = evaluate_predictions(y_true, y_pred, horizon=h,
+                                       train_series=train_series)
         residuals = y_true - y_pred
 
         # Visualization data
-        metrics["qq_data"] = generate_qq_data(residuals)
+        metrics["qq_data"]        = generate_qq_data(residuals)
         metrics["histogram_data"] = generate_histogram_data(residuals)
+
+        # Pull in pre-computed baselines from prediction dict if available
+        if "baseline_persist_rmse" in pred_info:
+            metrics["baselines"]["persistence"]["rmse"] = pred_info["baseline_persist_rmse"]
+        if "baseline_mean_rmse" in pred_info:
+            metrics["baselines"]["mean"]["rmse"] = pred_info["baseline_mean_rmse"]
 
         evaluation[h] = metrics
 
         if verbose:
-            sw = metrics["shapiro_wilk"]
+            sw  = metrics["shapiro_wilk"]
             tag = "[OK] NORMAL" if sw["is_normal"] else "[!!] non-normal"
+            mase = metrics.get("mase", float("nan"))
+            imp  = metrics.get("rmse_vs_persistence_pct", float("nan"))
             print(f"  h={h:>2} ({h*15:>4}min) | "
-                  f"RMSE={metrics['rmse']:.5f} | "
-                  f"MAE={metrics['mae']:.5f} | "
-                  f"R²={metrics['r2_score']:.4f} | "
-                  f"Shapiro p={sw['p_value']:.4f} [{tag}]")
+                  f"RMSE={metrics['rmse']:.4f} | "
+                  f"MAE={metrics['mae']:.4f} | "
+                  f"R2={metrics['r2_score']:.4f} | "
+                  f"MASE={mase:.3f} | "
+                  f"vs persist={imp:+.1f}% | "
+                  f"[{tag}]")
 
     return evaluation
 
@@ -246,26 +335,29 @@ def save_evaluation(evaluation: dict, filename: str = "evaluation_results.json")
 
 
 def print_summary_table(evaluation: dict):
-    """Print a formatted summary table."""
-    print("\n" + "=" * 80)
-    print(f"{'Horizon':>10} {'RMSE':>10} {'MAE':>10} {'R²':>8} "
-          f"{'Skew':>8} {'Kurt':>8} {'S-W p':>10} {'Normal':>8}")
-    print("-" * 80)
+    """Print a formatted summary table including baselines and MASE."""
+    print("\n" + "=" * 100)
+    print(f"{'Horizon':>9} {'RMSE':>9} {'MAE':>9} {'R2':>7} "
+          f"{'MASE':>7} {'vs Persist':>11} {'Persist RMSE':>13} {'Normal':>8}")
+    print("-" * 100)
 
     for h in sorted(evaluation.keys()):
-        m = evaluation[h]
+        m  = evaluation[h]
         sw = m["shapiro_wilk"]
-        tag = "  [OK]" if sw["is_normal"] else "  [!!]"
+        tag = "[OK]" if sw["is_normal"] else "[!!]"
+        p_rmse = m.get("baselines", {}).get("persistence", {}).get("rmse", float("nan"))
+        imp    = m.get("rmse_vs_persistence_pct", float("nan"))
+        mase   = m.get("mase", float("nan"))
         print(f"{m['horizon_min']:>7}min "
-              f"{m['rmse']:>10.5f} "
-              f"{m['mae']:>10.5f} "
-              f"{m['r2_score']:>8.4f} "
-              f"{m['residual_skewness']:>8.3f} "
-              f"{m['residual_kurtosis']:>8.3f} "
-              f"{sw['p_value']:>10.4f} "
-              f"{tag}")
+              f"{m['rmse']:>9.4f} "
+              f"{m['mae']:>9.4f} "
+              f"{m['r2_score']:>7.4f} "
+              f"{mase:>7.3f} "
+              f"{imp:>+10.1f}% "
+              f"{p_rmse:>13.4f} "
+              f"{tag:>8}")
 
-    print("=" * 80)
+    print("=" * 100)
 
 
 if __name__ == "__main__":

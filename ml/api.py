@@ -94,6 +94,8 @@ pipeline_state = {
     "evaluation":  None,
     "trained_satellites": [],
     "startup_time": None,
+    "test_data_uploaded": False,   # True only after user explicitly uploads test CSV
+    "active_satellite": None,      # satellite whose test data is currently displayed
 }
 
 
@@ -101,39 +103,52 @@ pipeline_state = {
 # Startup — load data and train/restore before accepting requests
 # =============================================================================
 
-def _checkpoints_exist() -> bool:
-    """Return True if checkpoints for all configured horizons are on disk."""
+def _checkpoints_exist(satellite_ids: list) -> bool:
+    """Return True if checkpoints exist for all satellites and horizons."""
     if not os.path.isdir(CHECKPOINT_DIR):
         return False
-    for h in HORIZONS:
-        if not os.path.exists(os.path.join(CHECKPOINT_DIR, f"lstm_gru_h{h}.pt")):
+    for sat_id in satellite_ids:
+        sat_path = os.path.join(CHECKPOINT_DIR, sat_id)
+        if not os.path.isdir(sat_path):
             return False
-        if not os.path.exists(os.path.join(CHECKPOINT_DIR, f"stacker_h{h}.pkl")):
-            return False
+        for h in HORIZONS:
+            if not os.path.exists(os.path.join(sat_path, f"lstm_gru_h{h}.pt")):
+                return False
+            if not os.path.exists(os.path.join(sat_path, f"stacker_h{h}.pkl")):
+                return False
     return True
 
 
 def _run_predictions_and_evaluation(
     dataset: GNSSDataset,
     ensembles: dict,
+    sat_id: str = None,
 ) -> None:
     """
-    Generate predictions and evaluation for the primary satellite (GEO preferred).
+    Generate predictions and evaluation for the specified satellite.
+    If sat_id is None, defaults to GEO (or first available).
     Stores results in pipeline_state and saves JSON files to RESULTS_DIR.
     """
     from pipeline.predict import predict_day8
     from pipeline.evaluate import full_evaluation
 
-    primary_id = "GEO" if "GEO" in ensembles else list(ensembles.keys())[0]
-    ensemble   = ensembles[primary_id]
-    error_col  = dataset.get_default_error_col()
+    # Use the satellite whose test data was uploaded; fall back to GEO
+    if sat_id is None or sat_id not in ensembles:
+        sat_id = "GEO" if "GEO" in ensembles else list(ensembles.keys())[0]
+
+    ensemble  = ensembles[sat_id]
+    error_col = dataset.get_default_error_col()
 
     train_series, test_series, _ = dataset.get_satellite_data(
-        primary_id, error_col, normalize=False
+        sat_id, error_col, normalize=False
     )
+
+    print(f"  Running predictions for {sat_id} — "
+          f"train={len(train_series)} steps, test={len(test_series)} steps")
 
     predictions = predict_day8(ensemble, train_series, test_series, verbose=False)
     pipeline_state["predictions"] = predictions
+    pipeline_state["active_satellite"] = sat_id
 
     # Save predictions JSON
     os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -141,13 +156,17 @@ def _run_predictions_and_evaluation(
     with open(pred_path, "w") as f:
         json.dump(predictions, f, indent=2, default=str)
 
-    evaluation = full_evaluation(predictions)
+    # Pass train_series so full_evaluation can compute MASE and persistence baseline
+    evaluation = full_evaluation(predictions, train_series=train_series, verbose=False)
     pipeline_state["evaluation"] = evaluation
 
     # Save evaluation JSON
     eval_path = os.path.join(RESULTS_DIR, "evaluation_results.json")
     with open(eval_path, "w") as f:
         json.dump(evaluation, f, indent=2, default=str)
+
+    print(f"  Predictions + evaluation saved for {sat_id}.")
+
 
 
 def startup_event():
@@ -180,13 +199,13 @@ def startup_event():
     error_col = dataset.get_default_error_col()
 
     # 2. Train or restore checkpoints
-    if _checkpoints_exist():
+    if _checkpoints_exist(dataset.satellite_ids):
         # Fast path — load existing checkpoints
         print(f"  Checkpoints found in '{CHECKPOINT_DIR}' -- loading...")
         pipeline_state["message"] = "Loading saved model checkpoints..."
         ensembles = {}
         for sat_id in dataset.satellite_ids:
-            ensemble = GNSSEnsemble()
+            ensemble = GNSSEnsemble(satellite_id=sat_id)
             ensemble.load(CHECKPOINT_DIR)
             ensembles[sat_id] = ensemble
         print("  Checkpoints loaded.")
@@ -201,9 +220,9 @@ def startup_event():
             ensembles = train_all_satellites(
                 dataset, error_col, verbose=True
             )
-            # Save primary satellite checkpoints
-            primary_id = "GEO" if "GEO" in ensembles else list(ensembles.keys())[0]
-            ensembles[primary_id].save(CHECKPOINT_DIR)
+            # Save all satellite checkpoints
+            for sat_id, ensemble in ensembles.items():
+                ensemble.save(CHECKPOINT_DIR)
             print(f"  Checkpoints saved to '{CHECKPOINT_DIR}'")
         except Exception as e:
             pipeline_state["status"]  = "error"
@@ -219,21 +238,16 @@ def startup_event():
     )
     pipeline_state["trained_satellites"]  = list(ensembles.keys())
 
-    # 3. Generate initial predictions and evaluation
-    try:
-        pipeline_state["message"] = "Generating initial predictions..."
-        _run_predictions_and_evaluation(dataset, ensembles)
-    except Exception as e:
-        print(f"  WARNING: Prediction/evaluation failed: {e}")
-        import traceback
-        traceback.print_exc()
+    # NOTE: predictions are NOT generated at startup.
+    # They are only generated after the user explicitly uploads a test CSV
+    # via POST /api/upload. This keeps the dashboard clean on first launch.
 
     elapsed = time.time() - t0
     pipeline_state["status"]       = "trained"
     pipeline_state["progress"]     = 100
     pipeline_state["message"]      = (
-        f"Ready -- {len(ensembles)} satellite(s) trained "
-        f"[{', '.join(ensembles.keys())}] in {elapsed:.1f}s"
+        f"Ready — {len(ensembles)} satellite(s) trained "
+        f"[{', '.join(ensembles.keys())}]. Upload a test CSV to see predictions."
     )
     pipeline_state["startup_time"] = elapsed
 
@@ -255,6 +269,8 @@ async def get_status():
         "has_data":     pipeline_state["dataset"] is not None,
         "has_model":    bool(pipeline_state["ensembles"]),
         "has_predictions": pipeline_state["predictions"] is not None,
+        "test_data_uploaded": pipeline_state["test_data_uploaded"],
+        "active_satellite":   pipeline_state["active_satellite"],
         "trained_satellites": pipeline_state["trained_satellites"],
         "startup_time": pipeline_state["startup_time"],
     }
@@ -314,18 +330,22 @@ async def upload_test_data(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Regenerate predictions with the new test data
+    # Regenerate predictions with the new test data for this satellite
     try:
         _run_predictions_and_evaluation(
             pipeline_state["dataset"],
-            pipeline_state["ensembles"]
+            pipeline_state["ensembles"],
+            sat_id=sat_id,          # predict specifically for the uploaded satellite
         )
+        pipeline_state["test_data_uploaded"] = True
     except Exception as e:
         print(f"  WARNING: prediction re-run failed after upload: {e}")
+        import traceback
+        traceback.print_exc()
 
     return {
         "status":    "success",
-        "message":   f"Test data uploaded and validated: {file.filename}",
+        "message":   f"Test data uploaded, predictions generated for {sat_id}: {file.filename}",
         "satellite": sat_id,
         "summary":   pipeline_state["dataset"].summary(),
     }
@@ -366,7 +386,7 @@ async def retrain(
                 sat_id, error_col, normalize=False
             )
 
-            ensemble = GNSSEnsemble()
+            ensemble = GNSSEnsemble(satellite_id=sat_id)
             ensemble.fit(train_series, epochs=epochs, quick=quick, verbose=True)
             ensemble.save(CHECKPOINT_DIR)
 

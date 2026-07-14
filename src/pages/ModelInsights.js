@@ -149,7 +149,7 @@ const ModelInsights = () => {
   // Ridge weights per horizon
   const weightsData = modelsInfo
     ? [1, 2, 4, 8, 16].map(h => {
-        const w = modelsInfo.horizons?.[h]?.weights || {};
+        const w = modelsInfo.horizons?.[String(h)]?.weights || {};
         return {
           horizon: `${h * 15}min`,
           'LSTM-GRU': parseFloat((w['LSTM-GRU'] ?? 0).toFixed(3)),

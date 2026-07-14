@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './MetaLearner.css';
+import { Upload } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000/api';
 
@@ -10,6 +11,7 @@ const MetaLearner = () => {
   const [evaluation, setEvaluation] = useState(null);
   const [modelsInfo, setModelsInfo] = useState(null);
   const [usingDemoData, setUsingDemoData] = useState(true);
+  const [apiStatus, setApiStatus] = useState(null);
 
   // Actual pipeline components from the paper
   const models = [
@@ -65,6 +67,12 @@ const MetaLearner = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        const statusRes = await fetch(`${API_BASE}/status`).catch(() => null);
+        if (statusRes?.ok) {
+          const status = await statusRes.json();
+          setApiStatus(status);
+          if (!status.test_data_uploaded) return; // wait for upload
+        }
         const [evalRes, modelsRes] = await Promise.all([
           fetch(`${API_BASE}/evaluation`).catch(() => null),
           fetch(`${API_BASE}/models`).catch(() => null),
@@ -157,6 +165,37 @@ const MetaLearner = () => {
         xgboost: (data.weights?.['XGBoost'] ?? 0).toFixed(3),
       }))
     : [];
+
+  if (apiStatus?.test_data_uploaded === false) {
+    return (
+      <div className="meta-learner-simple" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60vh' }}>
+        <div style={{ textAlign: 'center', maxWidth: '420px' }}>
+          <div style={{
+            width: '80px', height: '80px', borderRadius: '50%',
+            backgroundColor: 'var(--primary-100)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            margin: '0 auto 1.5rem',
+          }}>
+            <Upload size={36} style={{ color: 'var(--primary-500)' }} />
+          </div>
+          <h2 style={{ color: 'var(--text-primary)', marginBottom: '0.75rem', fontSize: '1.5rem', fontWeight: '600' }}>
+            No Test Data Yet
+          </h2>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', lineHeight: '1.6' }}>
+            Upload a test CSV to evaluate the meta-learner ensemble accuracy.
+          </p>
+          <a href="/upload" style={{
+            display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+            backgroundColor: 'var(--primary-500)', color: 'white',
+            padding: '0.65rem 1.5rem', borderRadius: '0.5rem',
+            fontWeight: '500', textDecoration: 'none', fontSize: '0.95rem',
+          }}>
+            <Upload size={16} /> Go to Data Upload
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="meta-learner-simple">

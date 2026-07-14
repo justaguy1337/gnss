@@ -3,7 +3,6 @@ import {
   Upload, 
   FileText, 
   CheckCircle, 
-  Clock,
   Play,
   Database,
   AlertCircle,
@@ -17,8 +16,12 @@ const API_BASE = 'http://localhost:8000/api';
 
 const DataUpload = () => {
   const [dragActive, setDragActive] = useState(false);
-  const [files, setFiles] = useState([]);
-  const [uploadResult, setUploadResult] = useState(null);
+  const [files, setFiles] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('gnss_uploaded_files') || '[]'); } catch { return []; }
+  });
+  const [uploadResult, setUploadResult] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('gnss_upload_result') || 'null'); } catch { return null; }
+  });
   const [trainingStatus, setTrainingStatus] = useState(null);
   const [isTraining, setIsTraining] = useState(false);
   const [serverStatus, setServerStatus] = useState(null);
@@ -36,6 +39,17 @@ const DataUpload = () => {
     const id = setInterval(fetchStatus, 4000);
     return () => clearInterval(id);
   }, []);
+
+  // Persist files and uploadResult to localStorage whenever they change
+  useEffect(() => {
+    // Only store serialisable fields (drop the raw File object)
+    const serialisable = files.map(({ raw, ...rest }) => rest);
+    localStorage.setItem('gnss_uploaded_files', JSON.stringify(serialisable));
+  }, [files]);
+
+  useEffect(() => {
+    localStorage.setItem('gnss_upload_result', JSON.stringify(uploadResult));
+  }, [uploadResult]);
 
   const handleDrag = (e) => {
     e.preventDefault();
@@ -63,7 +77,8 @@ const DataUpload = () => {
       size: (file.size / 1024 / 1024).toFixed(2),
       status: 'uploading',
       progress: 0,
-      raw: file
+      raw: file,
+      uploadedAt: new Date().toLocaleTimeString(),
     }));
     setFiles(prev => [...prev, ...newFiles]);
 
@@ -85,7 +100,7 @@ const DataUpload = () => {
           : f
       ));
 
-      if (result.success) setUploadResult(result.data);
+      if (result.success) setUploadResult({ ...result.data, uploadedAt: new Date().toLocaleString() });
       else setUploadResult({ status: 'error', message: result.error });
     }
   };
@@ -337,6 +352,22 @@ const DataUpload = () => {
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginLeft: '2rem' }}>
               <p>{uploadResult.summary.n_satellites} satellite(s) — test rows updated</p>
               <p>{uploadResult.summary.n_meo} MEO + {uploadResult.summary.n_geo} GEO</p>
+              {uploadResult.uploadedAt && (
+                <p style={{ marginTop: '0.25rem', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                  Uploaded at: {uploadResult.uploadedAt}
+                </p>
+              )}
+              <p style={{
+                marginTop: '0.5rem',
+                padding: '0.35rem 0.6rem',
+                backgroundColor: '#ECFDF5',
+                borderRadius: '0.375rem',
+                color: '#065F46',
+                fontSize: '0.78rem',
+                display: 'inline-block',
+              }}>
+                ✓ Dashboard predictions updated — switch to Dashboard tab to see results
+              </p>
             </div>
           )}
         </div>
@@ -345,9 +376,30 @@ const DataUpload = () => {
       {/* File list */}
       {files.length > 0 && (
         <div className="card" style={{ marginBottom: '2rem' }}>
-          <h3 className="text-xl font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
-            Uploaded Files
-          </h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h3 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>
+              Uploaded Files
+            </h3>
+            <button
+              onClick={() => {
+                setFiles([]);
+                setUploadResult(null);
+                localStorage.removeItem('gnss_uploaded_files');
+                localStorage.removeItem('gnss_upload_result');
+              }}
+              style={{
+                backgroundColor: 'transparent',
+                border: '1px solid var(--border-color)',
+                borderRadius: '0.375rem',
+                padding: '0.3rem 0.75rem',
+                color: 'var(--text-muted)',
+                fontSize: '0.75rem',
+                cursor: 'pointer',
+              }}
+            >
+              Clear uploads
+            </button>
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {files.map((file, idx) => (
               <div key={idx} style={{

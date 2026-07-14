@@ -1,0 +1,17 @@
+# Core dependencies
+fastapi==0.111.0
+uvicorn==0.30.1
+pydantic==2.7.4
+python-multipart==0.0.9
+
+# Data science & ML
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.13.1
+scikit-learn==1.5.0
+xgboost==2.0.3
+
+# Deep learning & Gaussian Processes
+# For GPU/CUDA support, install torch via the cuda index-url first, then run pip install -r requirements.txt
+torch==2.3.1
+gpytorch==1.11
