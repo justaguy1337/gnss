@@ -113,8 +113,14 @@ def predict_day8(
                     print(f"  h={h*15:>4}min — rolling   wins  (RMSE {r_rmse:.3f} < {b_rmse:.3f})")
         return merged
 
+    # adapt_frac > 0: split test data into adaptation and evaluation slices
+    n_adapt      = max(1, int(len(test_series) * adapt_frac))
+    adapt_series = test_series[:n_adapt]   # first fraction — fine-tuning
+    eval_series  = test_series[n_adapt:]   # remainder — evaluation
+
     if verbose:
         print(f"  Split-test: adapt={n_adapt} steps, eval={len(eval_series)} steps")
+
 
     # ── Fine-tune short-horizon models on adapt_series ──
     import copy

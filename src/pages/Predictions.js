@@ -200,14 +200,20 @@ const Predictions = () => {
   const currentPred = predictions?.[String(selectedHorizon)];
   const currentEval = evaluation?.[String(selectedHorizon)];
 
-  // Prepare time-series chart data
+  // Sigma for confidence bands: use RMSE as 1-sigma estimate.
+  // ±1σ ≈ 68% CI,  ±2σ ≈ 95% CI.
+  const sigma = currentEval?.rmse || 0;
+
+  // Prepare time-series chart data with proper confidence bands
   const timeSeriesData = currentPred ? currentPred.predictions.map((pred, i) => ({
     step: i + 1,
     time: `${String(Math.floor(i * 15 / 60)).padStart(2, '0')}:${String((i * 15) % 60).padStart(2, '0')}`,
     predicted: parseFloat(pred.toFixed(4)),
     actual: currentPred.ground_truth ? parseFloat(currentPred.ground_truth[i]?.toFixed(4)) : null,
-    upper: parseFloat((pred + (currentPred.uncertainties?.[i] || 0) * 2).toFixed(4)),
-    lower: parseFloat((pred - (currentPred.uncertainties?.[i] || 0) * 2).toFixed(4)),
+    upper2: parseFloat((pred + 2 * sigma).toFixed(4)),  // ±2σ  (95% CI)
+    lower2: parseFloat((pred - 2 * sigma).toFixed(4)),
+    upper1: parseFloat((pred + sigma).toFixed(4)),       // ±1σ  (68% CI)
+    lower1: parseFloat((pred - sigma).toFixed(4)),
   })) : [];
 
   // Prepare histogram data
@@ -222,16 +228,29 @@ const Predictions = () => {
     sample: parseFloat(currentEval.qq_data.sample[i]?.toFixed(3) || 0),
   })) : [];
 
-  // Horizon comparison data
+  // Horizon comparison data (include R2)
   const horizonCompData = horizons.map(({ value: h, label }) => {
     const ev = evaluation?.[String(h)];
+    const persistRmseH = ev?.baselines?.persistence?.rmse || null;
+    const modelRmseH   = ev?.rmse || null;
+    const imprv = (persistRmseH && modelRmseH)
+      ? parseFloat(((persistRmseH - modelRmseH) / persistRmseH * 100).toFixed(1))
+      : 0;
     return {
       horizon: label,
       rmse: ev ? parseFloat(ev.rmse.toFixed(5)) : 0,
-      mae: ev ? parseFloat(ev.mae.toFixed(5)) : 0,
-      r2: ev ? parseFloat(ev.r2_score.toFixed(4)) : 0,
+      mae:  ev ? parseFloat(ev.mae.toFixed(5))  : 0,
+      r2:   ev ? parseFloat((ev.r2_score ?? 0).toFixed(4)) : 0,
+      imprv,
     };
   });
+
+  // Compute vs-persistence improvement for current horizon
+  const persistRmse = currentEval?.baselines?.persistence?.rmse || null;
+  const modelRmse   = currentEval?.rmse || null;
+  const vsPersisteImprv = (persistRmse && modelRmse)
+    ? ((persistRmse - modelRmse) / persistRmse * 100).toFixed(1)
+    : null;
 
   const downloadCSV = () => {
     if (!currentPred) return;
@@ -311,13 +330,15 @@ const Predictions = () => {
       <div className="grid-cols-4" style={{ marginBottom: '1.5rem' }}>
         {[
           { label: 'RMSE', value: currentEval?.rmse?.toFixed(5) || '—', color: 'var(--primary-600)' },
-          { label: 'MAE', value: currentEval?.mae?.toFixed(5) || '—', color: 'var(--accent-600)' },
+          { label: 'MAE',  value: currentEval?.mae?.toFixed(5)  || '—', color: 'var(--accent-600)' },
           { label: 'R² Score', value: currentEval?.r2_score?.toFixed(4) || '—', color: '#10B981' },
           {
-            label: 'Normality (S-W)',
-            value: currentEval?.shapiro_wilk?.is_normal ? '✓ Normal' : '✗ Non-normal',
-            color: currentEval?.shapiro_wilk?.is_normal ? '#10B981' : '#EF4444',
-            sub: `p = ${currentEval?.shapiro_wilk?.p_value?.toFixed(4) || '—'}`
+            label: 'vs Persistence',
+            value: vsPersisteImprv !== null
+              ? `${vsPersisteImprv > 0 ? '+' : ''}${vsPersisteImprv}%`
+              : '—',
+            color: vsPersisteImprv !== null && parseFloat(vsPersisteImprv) >= 0 ? '#10B981' : '#EF4444',
+            sub: persistRmse ? `Persist RMSE: ${persistRmse.toFixed(3)}` : undefined,
           },
         ].map((metric, i) => (
           <div key={i} className="card animate-slide-up" style={{ animationDelay: `${i * 80}ms`, textAlign: 'center' }}>
@@ -331,9 +352,16 @@ const Predictions = () => {
       {/* Time-Series Chart */}
       <div className="card" style={{ marginBottom: '1.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-          <h2 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>
-            Actual vs Predicted — {horizons.find(h => h.value === selectedHorizon)?.label} Horizon
-          </h2>
+          <div>
+            <h2 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>
+              Actual vs Predicted — {horizons.find(h => h.value === selectedHorizon)?.label} Horizon
+            </h2>
+            {sigma > 0 && (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.25rem' }}>
+                Shaded region: ±1σ (68% CI) and ±2σ (95% CI) based on RMSE = {sigma.toFixed(3)}
+              </p>
+            )}
+          </div>
           <TrendingUp size={20} style={{ color: 'var(--text-muted)' }} />
         </div>
         <ResponsiveContainer width="100%" height={350}>
@@ -350,9 +378,13 @@ const Predictions = () => {
               }}
             />
             <Legend />
-            <Area type="monotone" dataKey="upper" stroke="none" fill="#8B5CF6" fillOpacity={0.1} name="±2σ Upper" />
-            <Area type="monotone" dataKey="lower" stroke="none" fill="#8B5CF6" fillOpacity={0.1} name="±2σ Lower" />
-            <Line type="monotone" dataKey="actual" stroke="#F59E0B" strokeWidth={2} dot={false} name="Actual" />
+            {/* ±2σ outer band (95% CI) */}
+            <Area type="monotone" dataKey="upper2" stroke="none" fill="#8B5CF6" fillOpacity={0.08} legendType="none" />
+            <Area type="monotone" dataKey="lower2" stroke="none" fill="var(--bg-card, #1f2937)" fillOpacity={1} legendType="none" />
+            {/* ±1σ inner band (68% CI) */}
+            <Area type="monotone" dataKey="upper1" stroke="#8B5CF6" strokeWidth={1} strokeDasharray="3 3" fill="#8B5CF6" fillOpacity={0.15} name="±1σ (68% CI)" />
+            <Area type="monotone" dataKey="lower1" stroke="#8B5CF6" strokeWidth={1} strokeDasharray="3 3" fill="var(--bg-card, #1f2937)" fillOpacity={1} legendType="none" />
+            <Line type="monotone" dataKey="actual"    stroke="#F59E0B" strokeWidth={2} dot={false} name="Actual" />
             <Line type="monotone" dataKey="predicted" stroke="#3B82F6" strokeWidth={2} dot={false} name="Predicted" />
           </AreaChart>
         </ResponsiveContainer>
@@ -430,10 +462,15 @@ const Predictions = () => {
                 borderRadius: '8px',
                 color: 'var(--text-primary)'
               }}
+              formatter={(value, name) => [
+                name === 'vs Persist %' ? `${value > 0 ? '+' : ''}${value}%` : value,
+                name
+              ]}
             />
             <Legend />
-            <Bar dataKey="rmse" fill="#3B82F6" name="RMSE" radius={[4, 4, 0, 0]} />
-            <Bar dataKey="mae" fill="#F59E0B" name="MAE" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="rmse"  fill="#3B82F6" name="RMSE"       radius={[4, 4, 0, 0]} />
+            <Bar dataKey="mae"   fill="#F59E0B" name="MAE"        radius={[4, 4, 0, 0]} />
+            <Bar dataKey="imprv" fill="#10B981" name="vs Persist %" radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>

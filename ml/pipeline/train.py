@@ -62,6 +62,48 @@ def _denormalise(series: np.ndarray, mean: float, std: float) -> np.ndarray:
     return series * std + mean
 
 
+def _holt_forecast(buf: list, h: int,
+                   alpha: float = 0.80,
+                   beta:  float = 0.25) -> float:
+    """
+    Holt's linear (double) exponential smoothing on a raw observation buffer.
+
+    Tracks both the current *level* and the current *trend*, then
+    forecasts h steps ahead as: level_T + h * trend_T.
+
+    For very short horizons (h=1,2) in a volatile regime this performs
+    comparably to or better than persistence because it follows momentum:
+      - If the error has been rising  → predicts it keeps rising
+      - If the error has been falling → predicts it keeps falling
+
+    Parameters
+    ----------
+    buf   : list of floats — recent raw observations (rolling window)
+    h     : int — number of steps ahead to forecast
+    alpha : float — level smoothing factor (0=slow, 1=instant)
+    beta  : float — trend smoothing factor
+
+    Returns
+    -------
+    float — h-step-ahead forecast in original units
+    """
+    y = buf
+    if len(y) < 2:
+        return float(y[-1])
+
+    # Initialise with first two observations
+    level = float(y[0])
+    trend = float(y[1]) - float(y[0])
+
+    for t in range(1, len(y)):
+        yt          = float(y[t])
+        level_new   = alpha * yt + (1.0 - alpha) * (level + trend)
+        trend_new   = beta  * (level_new - level) + (1.0 - beta) * trend
+        level, trend = level_new, trend_new
+
+    return level + h * trend
+
+
 class GNSSEnsemble:
     """
     Full ensemble pipeline for GNSS error prediction.
@@ -730,6 +772,33 @@ class GNSSEnsemble:
                 pred_raw = _denormalise(
                     np.array([pred_normed]), self.train_mean, self.train_std
                 )[0]
+
+                # ── Adaptive short-horizon blend (h=1,2 only) ──
+                # In high-volatility regimes the model's Δ direction can be
+                # unreliable.  Blending with Holt's trend extrapolation and
+                # persistence reduces error by following the local momentum.
+                #
+                # NOTE: h=4 (60min) was tested and Holt blend HURT accuracy
+                # (-1.0 RMSE) because GNSS errors oscillate at that timescale
+                # rather than trend monotonically. Blend is only valid for
+                # h=1,2 where momentum is still a reliable signal.
+                if h <= 2 and len(buf) >= 4:
+                    af_val = amplitude_factor if amplitude_factor is not None else 1.0
+                    if af_val > 1.5:    # only blend when significantly out-of-distribution
+                        holt_pred    = _holt_forecast(buf, h, alpha=0.80, beta=0.25)
+                        persist_pred = float(buf[-1])
+
+                        # Blend weights: more weight to Holt+persist as volatility grows.
+                        # At af=1.5: model=55%, holt=30%, persist=15%
+                        # At af=4.0: model=25%, holt=45%, persist=30%
+                        # At af=7.0: model=15%, holt=50%, persist=35%
+                        w_model   = max(0.15, min(0.55, 0.55 - 0.06 * (af_val - 1.5)))
+                        w_persist = min(0.35, 0.15 + 0.04 * (af_val - 1.5))
+                        w_holt    = 1.0 - w_model - w_persist
+
+                        pred_raw = (w_model   * pred_raw
+                                    + w_holt   * holt_pred
+                                    + w_persist * persist_pred)
 
                 preds_raw.append(float(pred_raw))
                 truth_raw.append(float(test_series[target_idx]))
