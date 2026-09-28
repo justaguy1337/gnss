@@ -44,18 +44,21 @@ DATASET_FILES = {
     "GEO": {
         "train_dir": TRAIN_DIR,
         "test_dir":  TEST_DIR,
-        "train": ["DATA_GEO_Train.csv"],
+        "train": ["DATA_GEO_Train_augmented.csv"],   # 10x augmented (real + synthetic)
+        # original: ["DATA_GEO_Train.csv"]           # restore this to use real-only data
         "test":  ["DATA_GEO_Test.csv"],
         "type":  "GEO",
     },
     "MEO": {
         "train_dir": TRAIN_DIR,
         "test_dir":  TEST_DIR,
-        "train": ["DATA_MEO_Train.csv", "DATA_MEO_Train2.csv"],
+        "train": ["DATA_MEO_Train_augmented.csv"],   # 10x augmented (merged Train + Train2)
+        # original: ["DATA_MEO_Train.csv", "DATA_MEO_Train2.csv"]
         "test":  ["DATA_MEO_Test.csv",  "DATA_MEO_Test2.csv"],
         "type":  "MEO",
     },
 }
+
 
 # =============================================================================
 # HORIZONS — adapted to dataset's actual temporal resolution
@@ -102,12 +105,12 @@ VAL_FRACTION  = 0.20                # fraction of data reserved for each val set
 # TRAINING
 # =============================================================================
 DEVICE         = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE     = 32               # larger batch — better GPU utilisation (GPU finishes tiny batches in <1ms)
-EPOCHS         = 200              # more epochs for smaller model
-LEARNING_RATE  = 5e-4
+BATCH_SIZE     = 16               # smaller batch → more gradient steps per epoch on ~1000 samples
+EPOCHS         = 200              # early stopping will cut this short
+LEARNING_RATE  = 1e-4             # was 5e-4 — lower to stop overshooting the loss minimum
 GRAD_CLIP      = 1.0
-PATIENCE       = 40               # generous patience — larger model needs more time
-LR_PATIENCE    = 15
+PATIENCE       = 20               # was 40 — stop sooner after val loss stops improving
+LR_PATIENCE    = 8                # was 15 — decay LR faster when stuck
 
 # =============================================================================
 # LSTM-GRU (paper §III-C) — right-sized for 623 training samples

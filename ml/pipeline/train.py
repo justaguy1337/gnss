@@ -177,14 +177,15 @@ class GNSSEnsemble:
             if verbose:
                 print(f"--- Horizon h={h} ({h*15} min) ---")
 
-            # ── Step 1: Build features on normalised series with amplitude augmentation ──
-            # augment=True applies random scale factors 0.15–7× to each training sample.
-            # This teaches the model to predict correctly under distribution shift.
-            X_seq, X_tab, y = build_features(normed, horizon=h, augment=True)
+            # ── Step 1: Build features on normalised series ──
+            # augment=False: amplitude augmentation was HURTING accuracy with
+            # DIFFERENCE_TARGET because it teaches wrong delta magnitudes.
+            # Synthetic days from block-bootstrap already provide augmentation.
+            X_seq, X_tab, y = build_features(normed, horizon=h, augment=False)
 
             if verbose:
                 print(f"  Features: X_seq={X_seq.shape}, X_tab={X_tab.shape}, "
-                      f"y={y.shape}  (diff={DIFFERENCE_TARGET}, augment=True)")
+                      f"y={y.shape}  (diff={DIFFERENCE_TARGET}, augment=False)")
 
             # ── Step 2: Expanding-window OOF for unbiased stacker training ──
             if verbose:
@@ -463,13 +464,9 @@ class GNSSEnsemble:
 
             stacker_pred = self.stackers[h].predict(p_lstm, p_trans, p_xgb)
 
-            import warnings
-            gp, lik = self.gp_models[h]
-            time_idx = np.arange(len(stacker_pred), dtype=np.float32) / max(len(stacker_pred) - 1, 1)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                gp_mean, gp_std = predict_gp(gp, lik, time_idx)
-            final_pred_normed = apply_gp_correction(stacker_pred, gp_mean)
+            # Use raw stacker predictions (GP correction removed — it was
+            # trained on OOF residuals and adds noise at test time)
+            final_pred_normed = stacker_pred
 
             # ── Reconstruct from differences (if DIFFERENCE_TARGET) ──
             if DIFFERENCE_TARGET:
@@ -479,6 +476,7 @@ class GNSSEnsemble:
 
             # ── Denormalize with training stats ──
             final_pred = _denormalise(final_pred_normed, norm_mean, norm_std)
+
 
             # ── Alignment ──
             if mode in ("test_context", "legacy"):
@@ -492,8 +490,8 @@ class GNSSEnsemble:
             # ── Build result dict ──
             results[h] = {
                 "predictions":   preds_aln.tolist() if preds_aln is not None else final_pred.tolist(),
-                "uncertainties": (gp_std[-len(preds_aln):] * norm_std).tolist()
-                                  if preds_aln is not None else (gp_std * norm_std).tolist(),
+                "uncertainties": [],   # GP uncertainty removed
+
                 "base_predictions": {
                     "lstm_gru":    _denormalise(
                         reconstruct_from_diff(p_lstm, inference_series, h) if DIFFERENCE_TARGET else p_lstm,
@@ -715,96 +713,62 @@ class GNSSEnsemble:
                 if target_idx >= n_test:
                     break    # not enough test steps left for this horizon
 
-                # ── Build normalised window ──
+                # ── Build normalised window (clean — no amplitude rescaling) ──
                 window_raw   = np.array(buf[-SEQUENCE_LENGTH:], dtype=np.float32)
                 window_normed = _normalise(window_raw, self.train_mean, self.train_std)
-
-                # ── Per-window instance normalisation (amplitude rescaling) ──
-                # The test-day window std can be 4–8× the training std.
-                # Rescaling to unit std puts the input in the model's familiar
-                # operating range, then we multiply predictions back.
-                # The true amplitude (rescale_factor) is passed to XGBoost via
-                # amplitude_override so it can calibrate by regime.
-                w_std = float(window_normed.std() + 1e-8)
-                # Only rescale when significantly outside expected range (±1 std)
-                rescale_threshold = 1.5
-                if w_std > rescale_threshold:
-                    window_for_model = (window_normed / w_std).astype(np.float32)
-                    amplitude_factor = w_std
-                else:
-                    window_for_model = window_normed
-                    amplitude_factor = None   # no override needed, already in range
 
                 # Time offset: training length + current step
                 time_off = len(series) + t
 
-                x_seq, x_tab, anchor_model = build_single_window(
-                    window_for_model, h,
-                    time_offset=time_off,
-                    amplitude_override=amplitude_factor,
+                x_seq, x_tab, anchor = build_single_window(
+                    window_normed, h, time_offset=time_off,
                 )
 
-                # ── Run ensemble ──
+                # ── Run ensemble (clean — no GP correction) ──
                 p_lstm  = predict_lstm_gru(*self.lstm_models[h], x_seq)
                 p_trans = predict_transformer(*self.transformer_models[h], x_seq)
                 p_xgb   = predict_xgboost(self.xgb_models[h], x_tab)
                 stk     = self.stackers[h].predict(p_lstm, p_trans, p_xgb)
 
-                # GP correction (use a fixed time index of 0.5 for single steps)
-                gp, lik = self.gp_models[h]
-                gp_t = np.array([0.5], dtype=np.float32)
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    gp_mean, _ = predict_gp(gp, lik, gp_t)
-                final_normed = apply_gp_correction(stk, gp_mean)
-
                 # ── Reconstruct from difference ──
-                # anchor_model is in model space (rescaled if amplitude_factor set).
-                # After reconstruction multiply by amplitude_factor to undo scaling.
-                af = amplitude_factor if amplitude_factor is not None else 1.0
                 if DIFFERENCE_TARGET:
-                    # pred in model-space, then scale back to normed space
-                    pred_normed = (anchor_model + float(final_normed[0])) * af
+                    pred_normed = anchor + float(stk[0])
                 else:
-                    pred_normed = float(final_normed[0]) * af
+                    pred_normed = float(stk[0])
 
                 # Denormalise to original units
                 pred_raw = _denormalise(
                     np.array([pred_normed]), self.train_mean, self.train_std
                 )[0]
 
-                # ── Adaptive short-horizon blend (h=1,2 only) ──
-                # In high-volatility regimes the model's Δ direction can be
-                # unreliable.  Blending with Holt's trend extrapolation and
-                # persistence reduces error by following the local momentum.
-                #
-                # NOTE: h=4 (60min) was tested and Holt blend HURT accuracy
-                # (-1.0 RMSE) because GNSS errors oscillate at that timescale
-                # rather than trend monotonically. Blend is only valid for
-                # h=1,2 where momentum is still a reliable signal.
-                if h <= 2 and len(buf) >= 4:
-                    af_val = amplitude_factor if amplitude_factor is not None else 1.0
-                    if af_val > 1.5:    # only blend when significantly out-of-distribution
-                        holt_pred    = _holt_forecast(buf, h, alpha=0.80, beta=0.25)
-                        persist_pred = float(buf[-1])
+                # ── Adaptive persistence-clipping ──
+                # The model sometimes overshoots at longer horizons. If the
+                # predicted change |pred - last_obs| is much larger than what
+                # the recent signal suggests (h × median_step), blend toward
+                # persistence to limit damage.
+                last_obs = float(buf[-1])
+                model_delta = abs(pred_raw - last_obs)
 
-                        # Blend weights: more weight to Holt+persist as volatility grows.
-                        # At af=1.5: model=55%, holt=30%, persist=15%
-                        # At af=4.0: model=25%, holt=45%, persist=30%
-                        # At af=7.0: model=15%, holt=50%, persist=35%
-                        w_model   = max(0.15, min(0.55, 0.55 - 0.06 * (af_val - 1.5)))
-                        w_persist = min(0.35, 0.15 + 0.04 * (af_val - 1.5))
-                        w_holt    = 1.0 - w_model - w_persist
-
-                        pred_raw = (w_model   * pred_raw
-                                    + w_holt   * holt_pred
-                                    + w_persist * persist_pred)
+                # Estimate expected step size from recent buffer
+                recent = np.array(buf[-min(24, len(buf)):], dtype=np.float64)
+                if len(recent) >= 2:
+                    steps = np.abs(np.diff(recent))
+                    median_step = float(np.median(steps)) + 1e-10
+                    # Maximum plausible change = h * median_step * safety_margin
+                    max_delta = h * median_step * 3.0
+                    if model_delta > max_delta and max_delta > 0:
+                        # Blend toward persistence: the larger the overshoot,
+                        # the more we trust persistence
+                        blend = min(1.0, max_delta / (model_delta + 1e-10))
+                        pred_raw = blend * pred_raw + (1.0 - blend) * last_obs
 
                 preds_raw.append(float(pred_raw))
                 truth_raw.append(float(test_series[target_idx]))
 
                 # Advance buffer: append the *observed* test value at step t
                 buf.append(float(test_series[t]))
+
+
 
             preds = np.array(preds_raw, dtype=np.float64)
             truth = np.array(truth_raw,  dtype=np.float64)

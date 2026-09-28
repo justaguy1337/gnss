@@ -23,6 +23,7 @@ yarn-debug.log*
 yarn-error.log*
 
 .venv/
+conference_101719.tex
 eval.py
 ml/__pycache__/
 ml/cache/

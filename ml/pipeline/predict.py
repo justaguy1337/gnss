@@ -73,45 +73,25 @@ def predict_day8(
             print("  Mode: training-tail (no test data)")
         return ensemble.predict(train_series, test_series=None)
 
-    # ── adapt_frac=0: skip fine-tuning, go straight to hybrid ──
+    # ── adapt_frac=0: rolling-only inference (clean, proven correct) ──
     if adapt_frac <= 0.0:
-        batch_results   = None
-        rolling_results = None
-        try:
-            batch_results = ensemble.predict(
+        if not use_rolling:
+            # Fallback to batch if rolling explicitly disabled
+            return ensemble.predict(
                 train_series, test_series=test_series, use_test_context=True
             )
-        except Exception as e:
-            if verbose:
-                print(f"  WARNING: batch inference failed: {e}")
-        if use_rolling:
-            try:
-                rolling_results = ensemble.predict_rolling(train_series, test_series)
-            except Exception as e:
-                if verbose:
-                    print(f"  WARNING: rolling inference failed: {e}")
-        if batch_results is None and rolling_results is None:
-            raise RuntimeError("Both batch and rolling inference failed.")
-        if batch_results is None:
-            return rolling_results
-        if rolling_results is None:
-            return batch_results
-        from config import HORIZONS as _HORIZONS
-        merged = {}
-        for h in _HORIZONS:
-            b = batch_results.get(h, {})
-            r = rolling_results.get(h, {})
-            b_rmse = b.get("rmse", float("inf"))
-            r_rmse = r.get("rmse", float("inf"))
-            if b_rmse <= r_rmse:
-                merged[h] = b
-                if verbose:
-                    print(f"  h={h*15:>4}min — batch_ctx wins  (RMSE {b_rmse:.3f} < {r_rmse:.3f})")
-            else:
-                merged[h] = r
-                if verbose:
-                    print(f"  h={h*15:>4}min — rolling   wins  (RMSE {r_rmse:.3f} < {b_rmse:.3f})")
-        return merged
+        rolling_results = ensemble.predict_rolling(train_series, test_series)
+        if verbose:
+            for h in sorted(rolling_results.keys()):
+                r = rolling_results[h]
+                rmse = r.get("rmse", float("nan"))
+                persist = r.get("baseline_persist_rmse", float("nan"))
+                delta = ((persist - rmse) / persist * 100) if persist > 0 else 0
+                tag = "BEATS persist" if rmse < persist else "below persist"
+                print(f"  h={h*15:>4}min — rolling RMSE={rmse:.4f}  "
+                      f"persist={persist:.4f}  ({delta:+.1f}% {tag})")
+        return rolling_results
+
 
     # adapt_frac > 0: split test data into adaptation and evaluation slices
     n_adapt      = max(1, int(len(test_series) * adapt_frac))
@@ -212,29 +192,50 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Generate Day 8 Predictions")
     parser.add_argument("--data", type=str, default=None)
-    parser.add_argument("--satellite", type=str, default=None)
+    parser.add_argument("--satellite", type=str, default=None,
+                        help="Satellite ID to predict for (default: all)")
     parser.add_argument("--error-col", type=str, default=None,
                         help="Error column (auto-detected if omitted)")
     parser.add_argument("--output", type=str, default="day8_predictions.json")
     args = parser.parse_args()
 
     # Load data
-    dataset = GNSSDataset(args.data)
-    sat_id = args.satellite or dataset.satellite_ids[0]
-
-    # Auto-detect error column
+    dataset = GNSSDataset()
     error_col = args.error_col or dataset.get_default_error_col()
-    print(f"Satellite: {sat_id}, Error column: {error_col}")
 
-    train_series, test_series, scaler = dataset.get_satellite_data(
-        sat_id, error_col, normalize=False
-    )
+    # Decide which satellites to run
+    satellites = [args.satellite] if args.satellite else dataset.satellite_ids
 
-    # Load trained ensemble
-    ensemble = GNSSEnsemble()
-    ensemble.load()
+    all_predictions = {}
 
-    # Predict
-    predictions = predict_day8(ensemble, train_series, test_series)
-    save_predictions(predictions, args.output)
+    for sat_id in satellites:
+        print(f"\n{'='*60}")
+        print(f"Satellite: {sat_id}, Error column: {error_col}")
+        print(f"{'='*60}")
+
+        train_series, test_series, scaler = dataset.get_satellite_data(
+            sat_id, error_col, normalize=False
+        )
+
+        # Load trained ensemble for this specific satellite
+        ensemble = GNSSEnsemble(satellite_id=sat_id)
+        ensemble.load()
+
+        # Predict
+        predictions = predict_day8(ensemble, train_series, test_series)
+        all_predictions[sat_id] = predictions
+
+    # If only one satellite was requested, save in the original flat format
+    if len(satellites) == 1:
+        save_predictions(all_predictions[satellites[0]], args.output)
+    else:
+        # Save combined predictions keyed by satellite_id, then by horizon
+        # Also save a flat version using the first satellite for backward compat
+        save_predictions(all_predictions[satellites[0]], args.output)
+        combined_path = os.path.join(RESULTS_DIR, "all_predictions.json")
+        with open(combined_path, "w") as f:
+            import json as _json
+            _json.dump(all_predictions, f, indent=2, default=str)
+        print(f"Combined predictions saved to {combined_path}")
+
 
