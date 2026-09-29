@@ -490,6 +490,25 @@ async def get_data_summary():
     return pipeline_state["dataset"].summary()
 
 
+@app.post("/api/clear")
+async def clear_test_data():
+    """Clear uploaded test data and reset predictions/evaluation."""
+    pipeline_state["predictions"] = None
+    pipeline_state["evaluation"] = None
+    pipeline_state["test_data_uploaded"] = False
+    pipeline_state["active_satellite"] = None
+
+    # Also clear the test data from the dataset object so it's truly reset
+    dataset = pipeline_state.get("dataset")
+    if dataset is not None:
+        dataset.clear_test_data()
+
+    return {
+        "status": "cleared",
+        "message": "Test data, predictions, and evaluation have been reset.",
+    }
+
+
 # =============================================================================
 # Entry point
 # =============================================================================

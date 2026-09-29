@@ -340,6 +340,35 @@ class GNSSDataset:
         print(f"  Test data updated for {sat_id}: {len(test_df)} steps")
         return sat_id
 
+    def clear_test_data(self):
+        """
+        Reset test data back to the original dataset files.
+
+        Reloads test CSVs from DATASET_DIR/test/ so the state matches
+        a fresh startup. Called when the user clears uploaded test data.
+        """
+        test_dir = os.path.join(self.dataset_dir, "test")
+        if os.path.isdir(test_dir):
+            self.test_dfs = {}
+            for fname in sorted(os.listdir(test_dir)):
+                if not fname.lower().endswith(".csv"):
+                    continue
+                fpath = os.path.join(test_dir, fname)
+                fupper = fname.upper()
+                if "GEO" in fupper:
+                    sat_id, sat_type = "GEO", "GEO"
+                elif "MEO" in fupper:
+                    sat_id, sat_type = "MEO", "MEO"
+                else:
+                    continue
+                raw_df = _read_isro_file(fpath, satellite_id=sat_id, satellite_type=sat_type)
+                self.test_dfs[sat_id] = _resample_to_uniform(raw_df, freq=RESAMPLE_INTERVAL)
+            print(f"  Test data reset to original dataset files: {list(self.test_dfs.keys())}")
+        else:
+            self.test_dfs = {}
+            print("  Test data cleared (no original test dir found).")
+
+
     # ─────────────────────────────────────────────────────────────────────
     # Column detection + scalers
     # ─────────────────────────────────────────────────────────────────────

@@ -29,7 +29,7 @@ const horizons = [
   { value: 2, label: '30 min' },
   { value: 4, label: '1 hour' },
   { value: 8, label: '2 hours' },
-  { value: 96, label: '24 hours' },
+  { value: 16, label: '4 hours' },
 ];
 
 // Approximate inverse error function for Q-Q plot

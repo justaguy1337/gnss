@@ -381,11 +381,16 @@ const DataUpload = () => {
               Uploaded Files
             </h3>
             <button
-              onClick={() => {
+              onClick={async () => {
                 setFiles([]);
                 setUploadResult(null);
                 localStorage.removeItem('gnss_uploaded_files');
                 localStorage.removeItem('gnss_upload_result');
+                try {
+                  await fetch(`${API_BASE}/clear`, { method: 'POST' });
+                } catch (e) {
+                  console.warn('Could not clear server state:', e);
+                }
               }}
               style={{
                 backgroundColor: 'transparent',

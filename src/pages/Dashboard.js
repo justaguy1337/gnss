@@ -31,7 +31,7 @@ const horizons = [
   { value: 2, label: '30 min' },
   { value: 4, label: '1 hr' },
   { value: 8, label: '2 hr' },
-  { value: 96, label: '24 hr' },
+  { value: 16, label: '4 hr' },
 ];
 
 const Dashboard = () => {
