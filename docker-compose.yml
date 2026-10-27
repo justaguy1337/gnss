@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  # ── FastAPI + ML Backend ─────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: gnss-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist trained model checkpoints across container restarts
+      # so re-training only happens once (or after you clear the volume).
+      - model-checkpoints:/app/ml/checkpoints
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+
+  # ── React Frontend (nginx) ──────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: gnss-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  model-checkpoints:

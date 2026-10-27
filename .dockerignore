@@ -1,0 +1,33 @@
+# Dependencies (reinstalled inside containers)
+node_modules
+.venv
+__pycache__
+
+# Git
+.git
+.gitignore
+
+# Build artifacts
+build
+
+# IDE / OS
+.DS_Store
+*.swp
+*.swo
+
+# ML artifacts (rebuilt inside container)
+ml/__pycache__
+ml/data/__pycache__
+ml/pipeline/__pycache__
+ml/features/__pycache__
+ml/models/__pycache__
+ml/checkpoints
+ml/results
+ml/cache
+
+# LaTeX
+*.tex
+*.aux
+*.log
+*.bbl
+*.blg

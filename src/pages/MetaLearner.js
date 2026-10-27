@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import './MetaLearner.css';
 import { Upload } from 'lucide-react';
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
 
 const MetaLearner = () => {
   const [showResults, setShowResults] = useState(false);
