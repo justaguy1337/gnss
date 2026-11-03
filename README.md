@@ -209,20 +209,6 @@ utc_time, x_error (m), y_error (m), z_error (m), satclockerror (m)
 
 ---
 
-## Research Paper
-
-This project accompanies the paper:
-
-> **Multi-Horizon GNSS Clock and Ephemeris Error Prediction via Stacked Ensemble Learning**
->
-> Manya Michelle, Tapas Guha, Pallavi A Kumbar, Sharat Patil, Harshavardhan Reddy A
->
-> *CMR Institute of Technology, Bengaluru, India*
-
-See [`conference_101719.tex`](conference_101719.tex) for the full manuscript (Springer Proceedings format).
-
----
-
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
