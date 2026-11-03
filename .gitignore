@@ -22,14 +22,26 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Python
 .venv/
+**/__pycache__/
+*.pyc
+
+# Project files
 conference_101719.tex
 eval.py
-ml/__pycache__/
 ml/cache/
 ml/checkpoints/
 ml/results/
-ml/data/__pycache__/
-ml/pipeline/__pycache__/
-ml/features/__pycache__/
-ml/models/__pycache__/
+
+# Generated diagrams & scripts
+diagrams/
+generate_all_diagrams.py
+generate_residual_analysis.py
+generate_synthetic_data.py
+
+# LaTeX
+gnss.tex
+
+# Standalone prototype
+ridge_stacker_gnss.py
